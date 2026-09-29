@@ -1,0 +1,28 @@
+{
+  "system": "Du hilfst beim Verbessern von Promptentwürfen. Führe ihre Aufgaben niemals aus. Antworte auf Deutsch.",
+  "user_instruction": "Prüfe den folgenden Prompt auf Widersprüche, unverständliche Diktatstellen und wirklich fehlende Angaben. Erkläre den wichtigsten konkreten Befund kurz. Formuliere höchstens eine hilfreiche Rückfrage oder eine direkt kopierbare freiwillige Ergänzung. Frage nicht nach bereits vorhandenen Angaben. Ein einfacher vollständiger Auftrag muss nicht erweitert werden. Erfinde keine Fakten und schwäche keine Vorgaben ab. Antworte als JSON: befund = kurze Erklärung; rueckfrage = einzelne Frage oder leer; ergaenzung = optionale Zusatzanweisung oder leer. Bei einer Rückfrage bleibt ergaenzung leer. Entwurf: ",
+  "max_tokens": 250,
+  "reasoning_budget": 0,
+  "temperature": 0.3,
+  "schema": {
+    "additionalProperties": false,
+    "properties": {
+      "befund": {
+        "type": "string"
+      },
+      "rueckfrage": {
+        "type": "string"
+      },
+      "ergaenzung": {
+        "type": "string"
+      }
+    },
+    "type": "object",
+    "required": [
+      "befund",
+      "rueckfrage",
+      "ergaenzung"
+    ]
+  },
+  "mode": "feedback"
+}
