@@ -52,3 +52,12 @@ Thumbs.db
 bin/
 obj/
 TestResults/
+
+# Local model/runtime artifacts and private settings
+moonshine-local.json
+settings.json
+models/
+Moonshine/
+*.ort
+*.onnx
+*.lnk

@@ -75,6 +75,7 @@ def main():
     voice = model.get_state_for_audio_prompt(torch.from_numpy(audio).unsqueeze(0))
     emit('ready', sampleRate=24000)
     active = None
+    active_id = None
     stop = threading.Event()
 
     def speak(request):
@@ -91,7 +92,8 @@ def main():
     for line in sys.stdin:
         request = json.loads(line)
         if request.get('type') == 'cancel':
-            stop.set()
+            if request.get('id') == active_id:
+                stop.set()
         elif request.get('type') == 'speak':
             if active is not None and active.is_alive():
                 active.join(timeout=1)
@@ -99,6 +101,7 @@ def main():
             if (active is not None and active.is_alive()) or not isinstance(text, str) or not text.strip() or len(text) > 4000:
                 emit('error', id=request.get('id'), code='request')
                 continue
+            active_id = request['id']
             stop.clear()
             active = threading.Thread(target=speak, args=(request,), daemon=True)
             active.start()

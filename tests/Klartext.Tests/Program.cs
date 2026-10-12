@@ -13,6 +13,11 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
+        if (args.Length == 2 && args[0] == "--speech-fixture") return ReviewFixTests.Fixture(args[1]);
+        if (args.Length == 2 && args[0] == "--workshop-ux") return WorkshopUxTests.Run(args[1]);
+        if (args.Length == 2 && args[0] == "--ux-safety") return UxSafetyTests.Run(args[1]);
+        if (args.Length == 2 && args[0] == "--ux-safety-preview") return UxSafetyTests.Preview(args[1]);
+        if (args.Length == 2 && args[0] == "--review-fixes") return ReviewFixTests.Run(args[1]);
         if (args.Length == 1 && args[0] == "--read-selection") return SelectedText.Run();
         if (args.Length == 2 && args[0] == "--read-test-selection") return SelectedText.WriteSelection(() => System.Windows.Automation.AutomationElement.FromHandle((nint)long.Parse(args[1])));
         if (args.Length == 2 && args[0] == "--reading-tests") return ReadingTests.Run(args[1], false);
@@ -79,6 +84,11 @@ internal static class Program
         {
             using var source = new AudioFileReader(args[1]); using var output = new WaveOutEvent();
             output.Init(source); output.Play(); while (output.PlaybackState == PlaybackState.Playing) Thread.Sleep(100); return 0;
+        }
+        if (args.Length > 0 && args[0].StartsWith("--", StringComparison.Ordinal))
+        {
+            Console.Error.WriteLine("Unbekannter oder unvollständiger Prüfschalter. Oberflächensuiten benötigen zusätzlich die Projektwurzel.");
+            return 2;
         }
         root = Path.GetFullPath(args.Length > 0 ? args[0] : ".");
         AppPaths.Root = Path.Combine(root, "artifacts", "test-profile"); AppPaths.Initialize();

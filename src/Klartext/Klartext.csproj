@@ -2,7 +2,8 @@
   <PropertyGroup>
     <OutputType>WinExe</OutputType><TargetFramework>net10.0-windows</TargetFramework>
     <UseWindowsForms>true</UseWindowsForms><UseWPF>true</UseWPF><Nullable>enable</Nullable><ImplicitUsings>enable</ImplicitUsings>
-    <ApplicationManifest>app.manifest</ApplicationManifest><Version>0.4.0-preview.14</Version>
+    <ApplicationManifest>app.manifest</ApplicationManifest><Version>0.4.0-preview.19</Version>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <AssemblyName>Sprachgarten</AssemblyName><RootNamespace>Klartext</RootNamespace>
     <Product>Sprachgarten</Product><Title>Sprachgarten</Title>
     <ApplicationIcon>Assets\Sprachgarten.ico</ApplicationIcon>
@@ -21,5 +22,7 @@
     <Content Include="Assets\**\*" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <EmbeddedResource Include="PromptReviewSpec.json" />
     <Content Include="Speech\speech_worker.py" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="Speech\moonshine_worker.py" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="moonshine-config.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

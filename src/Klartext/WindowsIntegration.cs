@@ -10,6 +10,13 @@ public sealed class HotkeyWindow : NativeWindow, IDisposable
     public HotkeySpec? Registered { get; private set; }
     public event Action? Pressed;
     public HotkeyWindow() => CreateHandle(new CreateParams { Caption = "Klartext Hotkey", Parent = new IntPtr(-3) });
+    internal static readonly HotkeySpec[] Suggestions = [new(6, 120), new(6, 121), new(6, 119), new(7, 120), new(7, 121)];
+    internal static HotkeySpec? FindAvailable()
+    {
+        // Probe using a separate handle; the current shortcut stays registered.
+        using var probe = new HotkeyWindow();
+        return Suggestions.FirstOrDefault(probe.TryRegister);
+    }
     public bool TryRegister(HotkeySpec spec)
     {
         if (!spec.IsValid) return false;

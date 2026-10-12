@@ -1,0 +1,40 @@
+{
+  "model": "Moonshine German Small Streaming",
+  "source": "https://download.moonshine.ai/model/small-streaming-de/quantized_26_08_24",
+  "upstreamLicense": "https://github.com/moonshine-ai/moonshine/blob/main/LICENSE",
+  "files": [
+    {
+      "Name": "adapter.ort",
+      "Sha256": "be438a3eb12ba3697a9e474d20f899e52d8e27b43a6fc4c4c809d2a099646744"
+    },
+    {
+      "Name": "cross_kv.ort",
+      "Sha256": "0c329cbf001bebbb9e34835e95676b9eb29e010405da46f65af511b8da16620e"
+    },
+    {
+      "Name": "decoder_kv.ort",
+      "Sha256": "7da8ac9a1da2a486158ccde88c756fd876bf7f11ef1c2ba14b80e8edcd30028c"
+    },
+    {
+      "Name": "encoder.ort",
+      "Sha256": "f31ef482f940e23af87906aeec986bf2e0a4862cad577bbc745264caab5a1858"
+    },
+    {
+      "Name": "frontend.model.ort",
+      "Sha256": "a93453223d93aa41d21691568cde3a01125fe00710a5f7004a825e1a322d3025"
+    },
+    {
+      "Name": "frontend.weights.ort",
+      "Sha256": "8b417e2e0ee762e34d7163d24383823bb8bd1d037fb6966c32b3f86a3de4961f"
+    },
+    {
+      "Name": "streaming_config.json",
+      "Sha256": "12d16c7f5ea6734d197b79baf47914ea7e996d6fca8d303a19aca10d0617cecc"
+    },
+    {
+      "Name": "tokenizer.bin",
+      "Sha256": "5725ad3771a1339802f8cebeda0fa8f7723f5282b1ee726c2544774d7399b9a7"
+    }
+  ],
+  "weightsIncludedInRepository": false
+}

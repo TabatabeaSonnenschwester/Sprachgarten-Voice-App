@@ -6,6 +6,8 @@ public static class ModelStore
 {
     public const long Size = 487601967;
     public const string Sha256 = "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b";
+    private static readonly VerifiedModelCache cache = new(Size, Sha256);
+    public static Task<bool> VerifyForUseAsync(string path, CancellationToken token = default) => cache.VerifyAsync(path, token);
     public const string Url = "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-small.bin";
     public static async Task<bool> VerifyAsync(string path, CancellationToken token = default)
     {
@@ -38,6 +40,7 @@ public static class ModelStore
                 }
             }
             if (!await VerifyAsync(partial, token)) throw new InvalidDataException("Modellprüfung fehlgeschlagen (SHA-256). Bitte erneut laden.");
+            await cache.ReleaseAsync(path, token);
             File.Move(partial, path, true);
         }
         finally { if (File.Exists(partial)) File.Delete(partial); }

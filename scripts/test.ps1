@@ -1,4 +1,4 @@
-param([switch]$Asr, [switch]$CorrectionsOnly, [switch]$ThemeOnly, [switch]$ExtensionsOnly, [switch]$LocalModel, [switch]$ExtensionUiOnly, [switch]$PromptReview, [switch]$CloudHandoff, [switch]$UxOnly, [switch]$ReadingOnly, [switch]$ReadingLive, [string]$ModelCase)
+param([switch]$Asr, [switch]$CorrectionsOnly, [switch]$ThemeOnly, [switch]$ExtensionsOnly, [switch]$LocalModel, [switch]$ExtensionUiOnly, [switch]$PromptReview, [switch]$CloudHandoff, [switch]$UxOnly, [switch]$ReadingOnly, [switch]$ReadingLive, [string]$ModelCase, [switch]$ReviewFixes, [switch]$UxSafety, [switch]$WorkshopUx)
 $ErrorActionPreference='Stop'
 $projectRoot=Split-Path $PSScriptRoot -Parent
 Set-Location -LiteralPath $projectRoot
@@ -22,5 +22,8 @@ if ($CloudHandoff) { $testArgs=@('--cloud-handoff-tests', $projectRoot) }
 if ($UxOnly) { $testArgs=@('--ux-only', $projectRoot) }
 if ($ReadingOnly) { $testArgs=@('--reading-tests', $projectRoot) }
 if ($ReadingLive) { $testArgs=@('--reading-live', $projectRoot) }
+if ($ReviewFixes) { $testArgs=@('--review-fixes', $projectRoot) }
+if ($UxSafety) { $testArgs=@('--ux-safety', $projectRoot) }
+if ($WorkshopUx) { $testArgs=@('--workshop-ux', $projectRoot) }
 & '.\tests\Klartext.Tests\bin\Release\net10.0-windows\Klartext.Tests.exe' @testArgs
 if ($LASTEXITCODE -ne 0) { throw 'Tests fehlgeschlagen; artifacts/test-results.json prüfen' }

@@ -10,7 +10,7 @@ public sealed class ClaudeConnectionDialog : Form
         Text = "Claude für die Promptprüfung"; Font = BrandTheme.Body; Size = new(700, 660); MinimumSize = new(540, 440); StartPosition = FormStartPosition.CenterParent;
         var settings = ClaudeConnection.Load();
         var flow = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoScroll = true, Padding = new(16) }; Controls.Add(flow);
-        var intro = WorkshopUi.Hint("Claude Sonnet 5 · mittlerer Denkaufwand\nEmpfehlung: ausgewogene Prüfung mit begrenztem Verbrauch. Die tatsächliche Qualität muss an deinen Aufgaben geprüft werden. Diktate bleiben lokal."); intro.MaximumSize = new(570, 0); flow.Controls.Add(intro);
+        var intro = WorkshopUi.Hint("Claude Sonnet 5 · mittlerer Denkaufwand\nDie Spracherkennung arbeitet lokal. Bei einer Online-Prüfung wird dein ausgewählter Prompt an Anthropic gesendet – auch übernommener Diktattext. Die Freigabe bleibt bis zum Deaktivieren gespeichert. Gesendet wird erst mit „Online mit Claude prüfen“."); intro.MaximumSize = new(570, 0); flow.Controls.Add(intro);
         flow.Controls.Add(WorkshopUi.Hint("API-Schlüssel aus deiner Claude Console · nur lokal verschlüsselt speichern"));
         var key = new TextBox { Width = 550, UseSystemPasswordChar = true, MaxLength = 512, AccessibleName = "Claude API-Schlüssel", Text = settings.ApiKey }; flow.Controls.Add(key);
         var enabled = new CheckBox { AutoSize = false, MaximumSize = new(550, 0), Text = "Online-Prüfung aktivieren: ausgewählten Prompt an Anthropic senden und Console-Guthaben verwenden", Checked = settings.Enabled }; flow.Controls.Add(enabled);

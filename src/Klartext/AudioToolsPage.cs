@@ -74,11 +74,11 @@ public sealed class AudioToolsPage : UserControl
     // Sprint C (S10): benannte Knöpfe, damit RefreshActions sie nach Zustand sperren und hervorheben kann.
     private readonly GardenButton choose;
     private readonly GardenButton stop = new() { Text = "Aufnahme stoppen" };
-    private readonly GardenButton cancelOperation = new() { Text = "Abbrechen / Wiedergabe stoppen" };
+    private readonly GardenButton cancelOperation = new() { Text = "Verarbeitung abbrechen" };
     private readonly GardenButton check = new() { Text = "Datei prüfen" };
-    private readonly GardenButton transcribe = new() { Text = "Transkribieren / wiederholen" };
+    private readonly GardenButton transcribe = new() { Text = "Transkribieren" };
     private readonly GardenButton play = new() { Text = "Anhören" };
-    private readonly GardenButton discardCopy = new() { Text = "Aufnahme / Arbeitskopie verwerfen" };
+    private readonly GardenButton discardCopy = new() { Text = "Arbeitskopie verwerfen" };
     private readonly GardenButton copyText = new() { Text = "Text kopieren" };
     private readonly GardenButton toWorkshop = new() { Text = "Zur Promptwerkstatt" };
     private readonly GardenButton clearText = new() { Text = "Text leeren" };
@@ -223,6 +223,8 @@ public sealed class AudioToolsPage : UserControl
         choose.Enabled = free && !damagedRecovery && !hasCopy && !hasText;
         stop.Enabled = recordingLease != null && !stopping;
         cancelOperation.Enabled = InProgress;
+        cancelOperation.Text = playbackLease != null ? "Wiedergabe stoppen" : "Verarbeitung abbrechen";
+        discardCopy.Text = laboratory ? "Aufnahme verwerfen" : "Arbeitskopie verwerfen";
         check.Enabled = canCheck;
         transcribe.Enabled = canCheck && !hasText;
         play.Enabled = free && hasCopy;
@@ -240,7 +242,7 @@ public sealed class AudioToolsPage : UserControl
         stepHint.Text = damagedRecovery ? "Gesicherten Text wiederherstellen – die Auswege stehen unten." :
             recordingLease != null ? "1. Aufnahme läuft – anschließend Aufnahme stoppen." :
             InProgress ? "Bitte warten – der aktuelle Vorgang läuft." :
-            hasText ? "3. Text ist da – kopieren oder zur Promptwerkstatt übernehmen." :
+            hasText ? "3. Text ist da – kopieren oder zur Promptwerkstatt übernehmen. Für eine neue Datei danach „Text leeren“" + (hasCopy ? " und „" + discardCopy.Text + "“ wählen." : " wählen.") :
             hasCopy ? "2. Audio ist bereit – jetzt transkribieren oder zuerst anhören." :
             laboratory ? "1. Beginne mit einer kurzen Testaufnahme." : "1. Wähle die Audiodatei, aus der du Text machen möchtest.";
         GardenButton primary = recordingLease != null ? stop : InProgress ? cancelOperation : damagedRecovery ? reloadResult : hasText ? copyText : hasCopy ? transcribe : choose;
@@ -438,9 +440,10 @@ public sealed class AudioToolsPage : UserControl
             lease.Token.ThrowIfCancellationRequested();
             info.Text = $"{stats.Seconds:F1} s · aktives Signal {stats.ActiveSeconds:F1} s · Spitze {stats.Peak:P0} · RMS {stats.Rms:F4}. " + (!stats.HasSignal ? "Zu kurz / zu still. Keine Transkription." : stats.Peak > .98 ? "Hoher Spitzenpegel: möglicherweise übersteuert." : "Messwerte vorhanden; Sprachqualität bitte selbst anhören.");
             if (!transcribe || !stats.HasSignal) return;
-            if (!await ModelStore.VerifyAsync(AppPaths.Model, lease.Token)) throw new InvalidDataException("Sprachmodell fehlt oder ist beschädigt. In Einstellungen einrichten.");
+            using var moonshine = new MoonshineService();
+            await moonshine.PrepareAsync(lease.Token);
             info.Text = "Lokal transkribieren … Abbrechen ist möglich.";
-            var text = await new Transcriber().TranscribeAsync(AppPaths.Model, pcm, lease.Token);
+            var text = await moonshine.TranscribeAsync(AppPaths.Model, pcm, lease.Token);
             if (string.IsNullOrWhiteSpace(text.Text)) throw new InvalidDataException("Kein Sprachtext erkannt. Arbeitskopie bleibt erhalten.");
             if (text.Text.Length > 24000) throw new InvalidDataException("Ergebnis überschreitet die Textgrenze. Bitte kürzere Aufnahme verwenden.");
             result.Text = text.Text; // Keep visible even if saving fails.

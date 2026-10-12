@@ -141,6 +141,8 @@ public static class BrandTheme
     // Karten tragen Paper als Fläche; alles darin erbt sie, damit Hinweise nicht als Cream-Flecken erscheinen.
     private static void Apply(Control parent, Color surface)
     {
+        // Empty explicit names prevent WinForms borrowing unrelated preceding label text for layout containers.
+        if (parent is Panel or TabPage or UserControl) parent.AccessibleName ??= "";
         if (!SystemInformation.HighContrast && parent is GardenCard or GardenCardFlow) surface = Paper;
         parent.ForeColor = SystemInformation.HighContrast ? SystemColors.ControlText : Ink;
         parent.BackColor = surface;
@@ -229,8 +231,11 @@ public class GardenPages : TabControl
     }
 }
 
-/// <summary>Die sechs Bereiche des Hauptfensters; einzige Instanz, Auswahl über die Leiste „Bereiche“.</summary>
-public sealed class GardenTabs : GardenPages { }
+/// <summary>Die sieben Bereiche; native Kopfzeilen liegen hinter den Seiten. Multiline verhindert überlagerte native Pfeilknöpfe.</summary>
+public sealed class GardenTabs : GardenPages
+{
+    public GardenTabs() { Multiline = true; }
+}
 
 /// <summary>Reiterleiste mit vollständigen Beschriftungen; bei Platzmangel zusätzliche Zeilen.</summary>
 public sealed class GardenTabStrip : Control
@@ -250,12 +255,36 @@ public sealed class GardenTabStrip : Control
         SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw | ControlStyles.Selectable, true);
         TabStop = true; AccessibleRole = AccessibleRole.PageTabList; Dock = DockStyle.Top; Margin = Padding.Empty;
         Height = BrandTheme.TabStripHeight; Cursor = Cursors.Hand;
-        pages.SelectedIndexChanged += (_, _) => Invalidate();
+        pages.SelectedIndexChanged += (_, _) => { Invalidate(); if (IsHandleCreated) AccessibilityNotifyClients(AccessibleEvents.Selection, pages.SelectedIndex + 1); };
         pages.ControlAdded += (_, e) => { if (e.Control != null) e.Control.TextChanged += (_, _) => Relayout(); Relayout(); };
         pages.ControlRemoved += (_, _) => Relayout();
         foreach (TabPage page in pages.TabPages) page.TextChanged += (_, _) => Relayout();
     }
     public int TabCount => tabs.Length;
+    protected override AccessibleObject CreateAccessibilityInstance() => new TabListAccessibility(this);
+    private sealed class TabListAccessibility(GardenTabStrip owner) : ControlAccessibleObject(owner)
+    {
+        public override int GetChildCount() => owner.pages.TabCount;
+        public override AccessibleObject? GetChild(int index) => index >= 0 && index < owner.pages.TabCount ? new TabAccessibility(owner, index) : null;
+        public override AccessibleObject? GetSelected() => GetChild(owner.pages.SelectedIndex);
+        public override AccessibleObject? GetFocused() => owner.Focused ? GetSelected() : null;
+        public override AccessibleObject? HitTest(int x, int y) => GetChild(owner.HitTest(owner.PointToClient(new Point(x, y)))) ?? base.HitTest(x, y);
+    }
+    private sealed class TabAccessibility(GardenTabStrip owner, int index) : AccessibleObject
+    {
+        public override string? Name { get => index < owner.pages.TabCount ? owner.pages.TabPages[index].Text : ""; set { } }
+        public override AccessibleRole Role => AccessibleRole.PageTab;
+        public override AccessibleObject? Parent => owner.AccessibilityObject;
+        public override Rectangle Bounds => owner.RectangleToScreen(owner.GetTabBounds(index));
+        public override string? DefaultAction => "Auswählen";
+        public override AccessibleStates State => AccessibleStates.Selectable | AccessibleStates.Focusable |
+            (!owner.Visible ? AccessibleStates.Invisible : AccessibleStates.None) |
+            (!owner.Enabled ? AccessibleStates.Unavailable : AccessibleStates.None) |
+            (index == owner.pages.SelectedIndex ? AccessibleStates.Selected | (owner.Focused ? AccessibleStates.Focused : AccessibleStates.None) : AccessibleStates.None);
+        public override void DoDefaultAction() { if (owner.Enabled && owner.Visible && index < owner.pages.TabCount) { owner.SelectTab(index); owner.Focus(); } }
+        public override void Select(AccessibleSelection flags)
+        { if ((flags & (AccessibleSelection.TakeSelection | AccessibleSelection.TakeFocus)) != 0) DoDefaultAction(); }
+    }
     public Rectangle GetTabBounds(int index) => index >= 0 && index < tabs.Length ? tabs[index] : Rectangle.Empty;
     public Font TabFont => tabFont;
     public int HitTest(Point point) { for (int i = 0; i < tabs.Length; i++) if (tabs[i].Contains(point)) return i; return -1; }

@@ -35,7 +35,7 @@ internal static class ExtensionUiTests
                 Check("acknowledged-result-releases-recording", session.CanStart && Field<Button>(main, "toggle").Enabled && Field<Label>(main, "stateSummary").Text.Contains("Bereit"));
                 typeof(MainForm).GetField("modelReady", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(main, false);
                 Invoke(main, "UpdateUi", "Bereit");
-                Check("missing-model-never-displays-ready", !Field<Label>(main, "stateSummary").Text.Contains("Bereit") && Field<Label>(main, "status").Text.Contains("Modell"));
+                Check("missing-model-never-displays-ready", !Field<Label>(main, "stateSummary").Text.Contains("Bereit") && Field<Label>(main, "status").Text.Contains("Spracherkennung prüfen"));
                 typeof(MainForm).GetField("modelReady", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(main, true);
                 session.HasPendingAudio = true; Invoke(main, "UpdateUi", "Bereit");
                 Check("pending-recording-has-actionable-status", !Field<Button>(main, "toggle").Enabled && Field<Label>(main, "stateSummary").Text.Contains("wartet") && Field<Label>(main, "status").Text.Contains("erneut transkribieren"));
@@ -66,7 +66,7 @@ internal static class ExtensionUiTests
                 Wait((Task)Call(main, "RefreshModelAsync", CancellationToken.None)!);
                 Invoke(main, "UpdateUi", "Bereit");
                 string afterCheck = modelLabel.Text;
-                Check("model-card-says-checking-before-first-check", beforeCheck == "Whisper Small wird geprüft …" && afterCheck == "Whisper Small fehlt oder ist ungültig · 488 MB Download", new { beforeCheck, afterCheck, modelPresent = File.Exists(AppPaths.Model) });
+                Check("model-card-says-checking-before-first-check", beforeCheck == "Moonshine Deutsch wird vorbereitet …" && afterCheck == "Moonshine ist momentan nicht bereit · erneut prüfen", new { beforeCheck, afterCheck, modelPresent = File.Exists(AppPaths.Model) });
                 mounted.Controls.Add(main.Controls[0]); mounted.CreateControl(); mounted.PerformLayout();
                 var session = Field<SessionState>(main, "state"); var cancelButton = Field<Button>(main, "cancel");
                 session.Move(DictationState.Setup); Invoke(main, "UpdateUi", "Bereit");
@@ -80,21 +80,21 @@ internal static class ExtensionUiTests
                 }
                 session.Move(DictationState.Ready); Invoke(main, "UpdateUi", "Bereit");
                 Check("setup-without-operation-offers-no-cancel", hiddenWithout && shownWith, new { hiddenWithout, shownWith });
-                // Sprint E (B-1, N6): DownloadModelAsync selbst aufrufen. Der Haken an modelDownload.EnabledChanged feuert im ersten UpdateUi nach den cancel-Zeilen,
-                // liest „Abbrechen“ ab und hält den Download mit einer eigenen Ausnahme vor dem ersten Netzzugriff an (alte und neue Reihenfolge gleich).
-                var downloadButton = Field<Button>(main, "modelDownload"); var statusLabel = Field<Label>(main, "status");
+                // Bundled ASR: rechecking enters Setup and disables competing actions before preparation.
+                // Stop at the UI boundary; no model process, download or clipboard operation is required.
+                var downloadButton = Field<GardenOnboarding>(main, "onboarding").Action; var statusLabel = Field<Label>(main, "status");
                 bool readyBefore = session.Current == DictationState.Ready && downloadButton.Enabled, hookFired = false, cancelShown = false, operationSet = false; string? faultType = null;
                 EventHandler stopBeforeNetwork = (_, _) =>
                 {
-                    if (session.Current != DictationState.Setup || !statusLabel.Text.Contains("Modell wird heruntergeladen")) return;
+                    if (session.Current != DictationState.Setup || !statusLabel.Text.Contains("Sprachmodell wird erneut geprüft")) return;
                     hookFired = true; cancelShown = cancelButton.Enabled && cancelButton.Visible; operationSet = Field<CancellationTokenSource?>(main, "operation") != null;
-                    throw new DownloadStopped();
+                    throw new PreparationStopped();
                 };
                 if (readyBefore)
                 {
                     Task started;
                     downloadButton.EnabledChanged += stopBeforeNetwork;
-                    try { started = (Task)Call(main, "DownloadModelAsync")!; }
+                    try { started = (Task)Call(main, "RecheckModelAsync")!; }
                     finally { downloadButton.EnabledChanged -= stopBeforeNetwork; }
                     if (started.IsFaulted) faultType = started.Exception!.InnerException?.GetType().Name;
                     else { Field<CancellationTokenSource?>(main, "operation")?.Cancel(); try { Wait(started); } catch { } }
@@ -102,7 +102,7 @@ internal static class ExtensionUiTests
                     if (session.Current != DictationState.Ready) session.Move(DictationState.Ready);
                     Invoke(main, "UpdateUi", "Bereit");
                 }
-                Check("download-shows-cancel-while-running", readyBefore && hookFired && cancelShown && operationSet && faultType == nameof(DownloadStopped), new { readyBefore, hookFired, cancelShown, operationSet, faultType });
+                Check("offline-recheck-enters-setup-without-fake-download-cancel", readyBefore && hookFired && !cancelShown && !operationSet && faultType == nameof(PreparationStopped), new { readyBefore, hookFired, cancelShown, operationSet, faultType });
                 var levelBar = Field<ProgressBar>(main, "level"); var downloadBar = Field<ProgressBar>(main, "progress");
                 Check("progress-bars-have-names", levelBar.AccessibleName == "Mikrofonpegel" && levelBar.AccessibleDescription == "Zeigt, ob das Mikrofon etwas hört" && downloadBar.AccessibleName == "Download-Fortschritt Sprachmodell",
                     new { level = levelBar.AccessibleName, levelDescription = levelBar.AccessibleDescription, download = downloadBar.AccessibleName });
@@ -239,17 +239,13 @@ internal static class ExtensionUiTests
             RecoveryStore.Clear();
             using (var main = new MainForm(false))
             {
-                File.WriteAllText(AppPaths.InstalledModel, "Dies ist keine Modelldatei.");
-                using (var lockedModel = File.Open(AppPaths.InstalledModel, FileMode.Open, FileAccess.Read, FileShare.None))
-                {
-                    Wait((Task)Call(main, "RefreshModelAsync", CancellationToken.None)!);
-                    string notice = (string)Call(main, "ModelNotice")!;
-                    Check("blocked-model-advises-retry-not-download", !Field<bool>(main, "modelReady") && Field<bool>(main, "modelBlocked") && notice.Contains("momentan nicht lesbar") && notice.Contains("erneut versuchen") && !notice.Contains("488"), notice);
-                }
-                File.Delete(AppPaths.InstalledModel);
+                // This component binary intentionally lacks the bundled Moonshine runtime.
+                Wait((Task)Call(main, "RefreshModelAsync", CancellationToken.None)!);
+                string notice = (string)Call(main, "ModelNotice")!;
+                Check("unavailable-bundled-runtime-advises-recheck", !Field<bool>(main, "modelReady") && Field<bool>(main, "modelBlocked") && notice.Contains("momentan nicht bereit") && notice.Contains("erneut prüfen") && !notice.Contains("herunterladen"), notice);
                 Wait((Task)Call(main, "RefreshModelAsync", CancellationToken.None)!);
                 string missingNotice = (string)Call(main, "ModelNotice")!;
-                Check("missing-model-still-advises-download", !Field<bool>(main, "modelReady") && !Field<bool>(main, "modelBlocked") && missingNotice == "Einmalig das Sprachmodell herunterladen.", missingNotice);
+                Check("recheck-without-runtime-remains-blocked", !Field<bool>(main, "modelReady") && Field<bool>(main, "modelBlocked") && missingNotice == notice, missingNotice);
             }
             // Sprint F (F2): „Modell herunterladen (488 MB)“ ist nur wählbar, wenn das Modell fehlt oder beschädigt ist.
             using (var main = new MainForm(false))
@@ -284,7 +280,7 @@ internal static class ExtensionUiTests
                 Wait((Task)Call(main, "RefreshModelAsync", CancellationToken.None)!);
                 Invoke(main, "UpdateUi", "Bereit");
                 string afterCheck = summary.Text;
-                Check("state-summary-says-checking-before-first-check", beforeCheck == "● Modell wird geprüft" && afterCheck == "● Modell fehlt", new { beforeCheck, afterCheck, modelPresent = File.Exists(AppPaths.Model) });
+                Check("state-summary-says-checking-before-first-check", beforeCheck == "● Modell wird geprüft" && afterCheck == "● Modell nicht lesbar", new { beforeCheck, afterCheck, modelPresent = File.Exists(AppPaths.Model) });
             }
             // Sprint F (F7): „Ergebnis erneut laden“ meldet eine leere Sicherung als leer; mit Text bleibt die bisherige Meldung.
             using (var main = new MainForm(false))
@@ -347,8 +343,9 @@ internal static class ExtensionUiTests
                 var views = Field<TabControl>(page, "views");
                 Check("exactly-creation-and-library-tabs", views.TabCount == 2 && views.TabPages[0].Text == "Erstellung" && views.TabPages[1].Text == "Bibliothek" && Descendants(page).OfType<TabControl>().Count() == 1);
                 var supplements = Field<GardenExpander>(page, "supplementsBlock");
+                Field<GardenExpander>(page, "reviewBlock").Expanded = true; Field<GardenExpander>(page, "sourceBlock").Expanded = true;
                 supplements.Expanded = true;
-                Check("all-editors-present-when-extras-open", new[] { "original", "goal", "audience", "format", "constraints", "draft" }.All(name => Field<TextBox>(page, name).Visible && !Field<TextBox>(page, name).ReadOnly));
+                Check("all-editors-present-when-extras-open", new[] { "original", "goal", "audience", "format", "constraints", "draft" }.All(name => Field<TextBox>(page, name).Visible && Field<TextBox>(page, name).ReadOnly == (name == "original")));
                 supplements.Expanded = false;
                 Check("no-empty-result-box-before-selection", !Field<TextBox>(page, "candidate").Visible && !Field<TextBox>(page, "reviewAnswer").Visible);
                 Check("creation-remains-one-common-scroll-page", !Descendants(workspace).OfType<ScrollableControl>().Any(c => c.AutoScroll) && workspace.AutoScroll);
@@ -357,7 +354,7 @@ internal static class ExtensionUiTests
                     host.Size = size; workspace.AutoScrollPosition = Point.Empty; host.PerformLayout(); Invoke(page, "ArrangeWorkspace"); Application.DoEvents();
                     var inputColumn = Field<FlowLayoutPanel>(page, "inputColumn"); var outputColumn = Field<FlowLayoutPanel>(page, "outputColumn");
                     bool wide = size.Width == 1440;
-                    Check("responsive-arrangement-" + size.Width, wide ? inputColumn.Top == outputColumn.Top && inputColumn.Right <= outputColumn.Left : inputColumn.Bottom <= outputColumn.Top, new { inputColumn.Bounds, Output = outputColumn.Bounds });
+                    Check("responsive-arrangement-" + size.Width, !outputColumn.Visible && draft.Width > workspace.ClientSize.Width * .8, new { inputColumn.Bounds, Output = outputColumn.Bounds });
                     Check("no-horizontal-page-overflow-" + size.Width, !workspace.HorizontalScroll.Visible && draft.Width > 300 && original.Width > 300, new { workspace.ClientSize, workspace.DisplayRectangle });
                     using var bitmap = new Bitmap(host.Width, host.Height); host.DrawToBitmap(bitmap, new Rectangle(Point.Empty, host.Size)); bitmap.Save(Path.Combine(folder, "workshop-" + size.Width + ".png"), ImageFormat.Png);
                 }
@@ -419,6 +416,7 @@ internal static class ExtensionUiTests
                 using (var bitmap = new Bitmap(host.Width, host.Height)) { host.DrawToBitmap(bitmap, new Rectangle(Point.Empty, host.Size)); bitmap.Save(Path.Combine(folder, "workshop-library.png"), ImageFormat.Png); }
                 views.SelectedIndex = 0;
                 Check("shared-page-draft-persists", page.Flush() && ProtectedFile.Read<PromptDocument>(Path.Combine(AppPaths.Root, "prompt-draft.bin"))?.Draft == draft.Text);
+                foreach (var name in new[] { "supplementsBlock", "saveBlock", "connectionBlock", "helpBlock", "reviewBlock", "sourceBlock" }) Field<GardenExpander>(page, name).Expanded = false;
                 SprintCWorkshopChecks(page, host, gate, Check);
             }
             string promptPath = Path.Combine(AppPaths.Root, "prompt-draft.bin"); byte[] bad = [3, 1, 4]; File.WriteAllBytes(promptPath, bad);
@@ -578,7 +576,7 @@ internal static class ExtensionUiTests
         check("short-info-is-one-line", info.Height == preferred && preferred <= oneLine + info.Padding.Vertical, new { info.Height, preferred, oneLine, info.Width, info.Padding, infoBounds = info.Bounds, page = page.ClientSize, views = views.Bounds, recovery = Field<FlowLayoutPanel>(page, "recoveryRow").Bounds, recoveryVisible = Field<FlowLayoutPanel>(page, "recoveryRow").Visible });
         // 21: 15 Schaltflächen im Reiter Erstellung.
         var creationButtons = Descendants(views.TabPages[0]).OfType<Button>().Select(b => b.Text).ToArray();
-        check("creation-button-count-after-collapse", creationButtons.Length == 15, new { count = creationButtons.Length, creationButtons });
+        check("creation-actions-complete-after-regrouping", creationButtons.Contains("Prompt kopieren") && creationButtons.Contains("Prüfen und ergänzen") && creationButtons.Contains("Änderungen übernehmen") && creationButtons.Contains("Letzte Übernahme rückgängig"), new { count = creationButtons.Length, creationButtons });
         // 19 und 20: zugeklappt, Kopfzeile während eines Auftrags bedienbar, Knöpfe darin gesperrt.
         bool allClosed = blocks.All(b => !b.Expanded) && blocks.All(b => (object)b.Header is not Button);
         var hold = new TaskCompletionSource();
@@ -600,7 +598,7 @@ internal static class ExtensionUiTests
         hold.SetResult(); Wait(job);
         foreach (var block in blocks) block.Expanded = false;
         var after = eight.Select(n => Field<TextBox>(page, n)).Select(t => new { t.AccessibleName, t.ReadOnly, t.Enabled }).ToArray();
-        check("job-makes-fields-readonly-not-disabled", during.All(f => f.ReadOnly && f.Enabled) && after.All(f => !f.ReadOnly && f.Enabled) && choosersLocked && choosers.All(c => c.Enabled), new { during, after, choosers = choosers.Length });
+        check("job-makes-fields-readonly-not-disabled", during.All(f => f.ReadOnly && f.Enabled) && after.All(f => f.Enabled && f.ReadOnly == (f.AccessibleName == "Ausgangstext")) && choosersLocked && choosers.All(c => c.Enabled), new { during, after, choosers = choosers.Length });
         // 23: schreibgeschützt sichtbar anders.
         var preview = Field<GardenTextBox>(page, "libraryPreview");
         check("readonly-fields-visibly-distinct", preview.ReadOnly && !draft.ReadOnly && preview.BackColor != draft.BackColor, new { readOnly = preview.BackColor.Name, editable = draft.BackColor.Name });
@@ -611,7 +609,7 @@ internal static class ExtensionUiTests
         void State(string name, bool damaged = false)
         {
             Invoke(page, "RefreshActions"); var p = SectionPrimaries(sections);
-            onePrimary &= damaged ? p.All(s => s.Count == 0) && reloadDraft.Primary && !freshDraft.Primary : p.All(s => s.Count == 1) && !reloadDraft.Primary;
+            onePrimary &= damaged ? p.All(s => s.Count == 0) && reloadDraft.Primary && !freshDraft.Primary : p.Sum(s => s.Count) == 1 && !reloadDraft.Primary;
             table.Add(new { state = name, primaries = p.Select(s => string.Join("|", s)).ToArray(), exitPrimary = reloadDraft.Primary });
         }
         Invoke(page, "LoadDocument", new PromptDocument()); State("leer");
@@ -619,7 +617,7 @@ internal static class ExtensionUiTests
         draft.Text = "Synthetischer Prompt."; State("Prompt vorhanden");
         candidate.Text = "Synthetischer Prompt. Mit Ergänzung."; SetField(page, "candidateSource", draft.Text); State("Ergänzung zur Übernahme bereit");
         SetField(page, "modelInvalid", true); State("lokale KI fehlt"); SetField(page, "modelInvalid", false);
-        onePrimary &= primaryDuringJob.All(s => s.Count == 1); table.Add(new { state = "Auftrag läuft", primaries = primaryDuringJob.Select(s => string.Join("|", s)).ToArray() });
+        onePrimary &= primaryDuringJob.Sum(s => s.Count) == 1; table.Add(new { state = "Auftrag läuft", primaries = primaryDuringJob.Select(s => string.Join("|", s)).ToArray() });
         SetField(page, "damagedDraft", true); State("Entwurf beschädigt", damaged: true); SetField(page, "damagedDraft", false); Invoke(page, "RefreshActions");
         // Ohne lokales Modell gewinnt im KI-Abschnitt immer der Download; mit Claude als Anbieter laufen die Zweige „prüfen“ und „übernehmen“.
         var provider = Field<ComboBox>(page, "reviewProvider"); int providerBefore = provider.SelectedIndex; provider.SelectedIndex = 1;
@@ -627,7 +625,7 @@ internal static class ExtensionUiTests
         draft.Text = "Synthetischer Prompt."; State("Prompt vorhanden · Claude");
         candidate.Text = "Synthetischer Prompt. Mit Ergänzung."; SetField(page, "candidateSource", draft.Text); State("Ergänzung zur Übernahme bereit · Claude");
         provider.SelectedIndex = providerBefore; Invoke(page, "RefreshActions");
-        check("creation-sections-one-primary-each", onePrimary && sections.Count == 5, table);
+        check("creation-one-main-action", onePrimary && sections.Count == 4, table);
         // 28: 24.000 Zeichen wachsen in die Seite, nicht in das Feld.
         string sentence = "Dies ist ein synthetischer Satz für einen sehr langen Prompt. ";
         string longPrompt = string.Concat(Enumerable.Repeat(sentence, 24000 / sentence.Length + 1))[..24000];
@@ -774,5 +772,5 @@ internal static class ExtensionUiTests
         while (!done()) { if (timeout.Elapsed.TotalSeconds > 10) throw new TimeoutException("Component event-loop timeout"); Application.DoEvents(); Thread.Sleep(5); }
     }
     private static void Invoke(object instance, string name, params object[] args) => instance.GetType().GetMethod(name, BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(instance, args);
-    private sealed class DownloadStopped() : Exception("Sprint E (B-1): Download im Prüflauf vor dem Netz angehalten.");
+    private sealed class PreparationStopped() : Exception("Lokale Vorbereitung im Prüflauf am UI-Übergang angehalten.");
 }

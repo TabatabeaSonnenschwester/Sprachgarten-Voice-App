@@ -6,7 +6,8 @@ public sealed class MainForm : Form
 {
     private readonly SessionState state = new();
     private readonly AudioRecorder audio = new();
-    private readonly Transcriber transcriber = new();
+    private readonly MoonshineService transcriber = new();
+    private readonly Stopwatch stopToResult = new();
     private readonly HotkeyWindow hotkey = new();
     private readonly HotkeyWindow readingHotkey = new();
     private readonly ReadingPage reading;
@@ -16,7 +17,7 @@ public sealed class MainForm : Form
     private readonly Label status = new() { AutoSize = true, Text = "Modell wird geprüft …", AccessibleName = "Status" };
     private readonly Label details = new() { AutoSize = true, MaximumSize = new Size(670, 0) };
     private readonly Label stateSummary = new() { AutoSize = true, Text = "● Bereit" };
-    private readonly Label modelLabel = new() { AutoSize = true, Text = "Whisper Small wird geprüft …" };
+    private readonly Label modelLabel = new() { AutoSize = true, Text = "Moonshine Deutsch wird vorbereitet …" };
     private readonly Label duration = new() { AutoSize = true, Text = "Maximal 5 Minuten pro Aufnahme · Verarbeitung auf der CPU" };
     private readonly ComboBox microphones = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 420, AccessibleName = "Mikrofon" };
     // Sprint C: kein eigener Scrollbalken; die Karte wird so hoch wie der Inhalt, die Diktatseite scrollt.
@@ -26,13 +27,13 @@ public sealed class MainForm : Form
     private readonly GardenButton retry = new() { Text = "Erneut transkribieren" };
     private readonly GardenButton discard = new() { Text = "Aufnahme verwerfen" };
     private readonly GardenButton copy = new() { Text = "Erneut kopieren" };
-    private readonly GardenButton applyCorrection = new() { Text = "Korrektur übernehmen" };
-    private readonly Label editHint = new() { Text = "Falsche Stelle markieren und richtig schreiben.\n„Korrektur übernehmen“ (Strg+Enter) fragt, ob Sprachgarten es sich merken soll.", AutoSize = true, MaximumSize = new Size(780, 0) };
+    private readonly GardenButton applyCorrection = new() { Text = "Korrektur übernehmen und kopieren" };
+    private readonly Label editHint = new() { Text = "Falsche Stelle markieren und richtig schreiben.\n„Korrektur übernehmen und kopieren“ (Strg+Enter) fragt, ob Sprachgarten es sich merken soll.", AutoSize = true, MaximumSize = new Size(780, 0) };
     private readonly ListView ruleList = new() { View = View.Details, FullRowSelect = true, MultiSelect = false, HideSelection = false, Dock = DockStyle.Fill, AccessibleName = "Gespeicherte Ersetzungen" };
     private readonly GardenButton removeRule = new() { Text = "Markierte Regel löschen" };
     private readonly Label rulesHint = new() { AutoSize = true, MaximumSize = new Size(630, 0) };
     private readonly GardenButton reloadRecovery = new() { Text = "Ergebnis erneut laden", Visible = false };
-    private readonly GardenButton modelDownload = new() { Text = "Modell herunterladen (488 MB)" };
+    private readonly GardenButton modelDownload = new() { Text = "Moonshine erneut prüfen" };
     private readonly ProgressBar progress = new() { Width = 420, Height = 15, AccessibleName = "Download-Fortschritt Sprachmodell" };
     private readonly ProgressBar level = new() { Width = 420, Height = 10, AccessibleName = "Mikrofonpegel", AccessibleDescription = "Zeigt, ob das Mikrofon etwas hört" };
     private readonly GardenButton settingsButton = new() { Text = "Hotkey ändern …" };
@@ -65,29 +66,35 @@ public sealed class MainForm : Form
     private readonly TabPage importsTab;
     private readonly TabPage laboratoryTab;
     private readonly TabPage workshopTab;
+    private readonly GardenOnboarding onboarding = new();
+    private readonly Label pageHeading = new() { AutoSize = true, Font = BrandTheme.Large };
+    private GardenNavigation navigation = null!;
+    private bool showOnboarding;
 
-    public MainForm(bool startHidden)
+    public MainForm(bool startHidden) : this(startHidden, null) { }
+    internal MainForm(bool startHidden, Func<ActivityGate, ReadingPage>? readingFactory)
     {
         this.startHidden = startHidden;
         activities = new(() => !exiting && !state.Busy && !copyBusy && !editingBusy);
         settings = UserSettings.Load(AppPaths.Settings);
+        audio.AudioChunk += transcriber.Feed;
         try { replacements = new ReplacementStore(Path.Combine(AppPaths.Root, "replacements.bin")); } catch { }
         SuspendLayout(); AutoScaleDimensions = new SizeF(96, 96); AutoScaleMode = AutoScaleMode.Dpi;
         Text = "Sprachgarten · Lokal diktieren · " + Application.ProductVersion; Name = "SprachgartenMain"; Icon = BrandTheme.Icon;
-        ClientSize = new Size(900, 740); MinimumSize = new Size(800, 660);
+        ClientSize = new Size(1120, 740); MinimumSize = new Size(840, 600);
         StartPosition = FormStartPosition.CenterScreen; Font = BrandTheme.Body;
         BackColor = BrandTheme.Cream;
-        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(24, 0, 24, 12), ColumnCount = 1, RowCount = 4 };
-        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        for (int i = 0; i < 4; i++) layout.RowStyles.Add(new RowStyle(i == 2 ? SizeType.Percent : SizeType.AutoSize, i == 2 ? 100 : 0));
-        var header = new GardenHeader { Dock = DockStyle.Fill, Height = 112, Margin = Padding.Empty };
-        header.Controls.Add(new GardenImage(BrandTheme.Microphone) { Bounds = new Rectangle(6, 12, 45, 82), AccessibleName = "Blumenmikrofon", TabStop = false });
-        header.Controls.Add(new GardenImage(BrandTheme.Wordmark) { Bounds = new Rectangle(65, 14, 315, 50), AccessibleName = "Sprachgarten", TabStop = false });
-        header.Controls.Add(new Label { Text = "Lokal diktieren", AutoSize = true, Font = BrandTheme.Body, Location = new Point(65, 70) });
-        stateSummary.Font = BrandTheme.Body; stateSummary.Location = new Point(575, 59); stateSummary.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-        details.Font = BrandTheme.Small; details.Location = new Point(575, 87); details.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-        header.Size = new Size(852, 112); header.Controls.Add(stateSummary); header.Controls.Add(details); layout.Controls.Add(header, 0, 0);
-        status.Font = BrandTheme.Small; status.MaximumSize = new Size(810, 0); status.Margin = new Padding(0, 0, 0, 8); layout.Controls.Add(status, 0, 1);
+        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 2 };
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 230)); layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        var workspace = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, Margin = Padding.Empty };
+        workspace.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        workspace.RowStyles.Add(new RowStyle(SizeType.Absolute, 68)); workspace.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        var header = new GardenHeader { Dock = DockStyle.Fill, Height = 68, Margin = Padding.Empty };
+        pageHeading.Location = new Point(16, 12); header.Controls.Add(pageHeading);
+        header.Controls.Add(new Label { Text = "Lokal arbeiten. In deinem Tempo.", AutoSize = true, Font = BrandTheme.Small, Location = new Point(16, 42) });
+        workspace.Controls.Add(header, 0, 0); layout.Controls.Add(workspace, 1, 0);
+        stateSummary.Font = BrandTheme.Small; details.Font = BrandTheme.Small; status.Font = BrandTheme.Small;
         tabs = new GardenTabs { Dock = DockStyle.Fill, Margin = Padding.Empty, AccessibleName = "Bereichsinhalt" };
         var dictationTab = new TabPage("Diktat") { Padding = new Padding(BrandTheme.PagePadding), UseVisualStyleBackColor = false };
         var settingsTab = new TabPage("Einstellungen") { Padding = new Padding(BrandTheme.PagePadding), UseVisualStyleBackColor = false };
@@ -106,7 +113,7 @@ public sealed class MainForm : Form
         laboratoryTab.Controls.Add(laboratory);
         tabs.TabPages.Add(laboratoryTab);
         tabs.TabPages.Add(workshopTab);
-        reading = new ReadingPage(activities);
+        reading = readingFactory?.Invoke(activities) ?? new ReadingPage(activities);
         readingTab = new TabPage("Vorlesen") { Padding = new Padding(BrandTheme.PagePadding) };
         readingTab.Controls.Add(reading); tabs.TabPages.Add(readingTab);
         reading.ShowRequested += () => { tabs.SelectedTab = readingTab; Show(); WindowState = FormWindowState.Normal; Activate(); };
@@ -117,10 +124,11 @@ public sealed class MainForm : Form
         var dictation = new TableLayoutPanel { Dock = DockStyle.Top, ColumnCount = 1, RowCount = 7 };
         dictation.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         for (int i = 0; i < 7; i++) dictation.RowStyles.Add(new RowStyle(i == 3 ? SizeType.Percent : SizeType.AutoSize, i == 3 ? 100 : 0));
-        toggle.Font = BrandTheme.Large; toggle.Padding = new Padding(23, 7, 23, 7); toggle.MinimumSize = new Size(310, 60);
+        toggle.Font = BrandTheme.Body; toggle.Padding = new Padding(18, 5, 18, 5); toggle.MinimumSize = new Size(250, 44);
         duration.Font = BrandTheme.Small; editHint.Font = BrandTheme.Small; transcript.Font = BrandTheme.Large;
         var transcriptFrame = new GardenCard { Dock = DockStyle.Fill, Margin = new Padding(0, 10, 0, 7), MinimumSize = new Size(0, 185) };
         transcriptFrame.Controls.Add(transcript);
+        transcriptFrame.Controls.Add(onboarding); onboarding.BringToFront();
         dictation.Controls.Add(Row(toggle, cancel), 0, 0); dictation.Controls.Add(duration, 0, 1); dictation.Controls.Add(level, 0, 2);
         dictation.Controls.Add(transcriptFrame, 0, 3); dictation.Controls.Add(Row(applyCorrection, copy), 0, 4); dictation.Controls.Add(editHint, 0, 5);
         dictation.Controls.Add(Row(retry, discard, reloadRecovery), 0, 6);
@@ -138,7 +146,9 @@ public sealed class MainForm : Form
                 {
                     resizeAgain = false;
                     int width = Math.Max(1, dictationViewport.ClientSize.Width);
-                    int frameHeight = Math.Max(transcriptFrame.MinimumSize.Height, transcript.ContentHeight + transcriptFrame.Padding.Vertical);
+                    int frameHeight = showOnboarding ? (int)(260 * DeviceDpi / 96f) : Math.Max(transcriptFrame.MinimumSize.Height, transcript.ContentHeight + transcriptFrame.Padding.Vertical);
+                    duration.MaximumSize = new Size(Math.Max(200, width - 16), 0);
+                    editHint.MaximumSize = new Size(Math.Max(200, width - 16), 0);
                     int required = frameHeight + transcriptFrame.Margin.Vertical;
                     foreach (Control child in dictation.Controls)
                     {
@@ -163,11 +173,20 @@ public sealed class MainForm : Form
         correctionsLayout.ClientSizeChanged += (_, _) => rulesHint.MaximumSize = new Size(Math.Max(200, correctionsLayout.ClientSize.Width - rulesHint.Margin.Horizontal), 0);
         RefreshRules();
         var preferences = BuildSettingsPage();
-        settingsTab.Controls.Add(preferences); layout.Controls.Add(BuildTabArea(), 0, 2);
+        settingsTab.Controls.Add(preferences); workspace.Controls.Add(tabs, 0, 1);
+        tabs.SelectedIndex = 0;
+        navigation = new GardenNavigation(tabs); layout.Controls.Add(navigation, 0, 0);
+        tabs.SelectedIndexChanged += (_, _) => pageHeading.Text = tabs.SelectedTab?.Text ?? "Diktat";
+        pageHeading.Text = tabs.SelectedTab?.Text ?? "Diktat";
         var hide = new GardenButton { Text = "Im Hintergrund weiterlaufen", Font = BrandTheme.Small };
         var quit = new GardenButton { Text = "Beenden", Font = BrandTheme.Small };
-        var footer = new GardenFooter { Dock = DockStyle.Fill, AutoSize = true, Padding = new Padding(0, 10, 65, 0), Margin = new Padding(0, 12, 0, 0), WrapContents = true };
-        footer.Controls.AddRange([hide, quit]); layout.Controls.Add(footer, 0, 3);
+        var footer = new TableLayoutPanel { AccessibleName = "Fensterstatus", Dock = DockStyle.Fill, AutoSize = true, ColumnCount = 2, Padding = new Padding(12, 6, 12, 8) };
+        footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        var notices = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, Margin = Padding.Empty };
+        var windowActions = Row(hide, quit); windowActions.WrapContents = false;
+        notices.Controls.AddRange([stateSummary, status, details]); footer.Controls.Add(notices, 0, 0); footer.Controls.Add(windowActions, 1, 0);
+        notices.SizeChanged += (_, _) => { int width = Math.Max(200, notices.ClientSize.Width - 12); status.MaximumSize = new Size(width, 0); details.MaximumSize = new Size(width, 0); };
+        layout.Controls.Add(footer, 0, 1); layout.SetColumnSpan(footer, 2);
         Controls.Add(layout);
         BrandTheme.Apply(this);
         ResumeLayout(true);
@@ -183,6 +202,8 @@ public sealed class MainForm : Form
         ruleList.SelectedIndexChanged += (_, _) => UpdateUi();
         reloadRecovery.Click += (_, _) => ReloadRecovery();
         modelDownload.Click += async (_, _) => await DownloadModelAsync();
+        onboarding.Action.Click += async (_, _) => { if (modelBlocked) await RecheckModelAsync(); else await DownloadModelAsync(); };
+        onboarding.Hotkey.Click += (_, _) => ChangeHotkey();
         refresh.Click += (_, _) => LoadDevices();
         settingsButton.Click += (_, _) => ChangeHotkey();
         microphones.SelectedIndexChanged += (_, _) => SaveMicrophone();
@@ -201,7 +222,8 @@ public sealed class MainForm : Form
         menu.Items.Add("Beenden", null, async (_, _) => await ExitAsync()); tray.ContextMenuStrip = menu;
         tray.DoubleClick += (_, _) => { Show(); WindowState = FormWindowState.Normal; Activate(); };
         // T1: minimising stays in the taskbar; the X exits through OnFormClosing, not by hiding.
-        Shown += async (_, _) => await InitializeAsync();
+        Shown += async (_, _) => { FitMainWindow(); await InitializeAsync(); if (!exiting && ContainsFocus && tabs.SelectedIndex == 0) { if (showOnboarding && onboarding.Action.Enabled) onboarding.Action.Focus(); else if (toggle.Enabled) toggle.Focus(); } };
+        DpiChanged += (_, _) => BeginInvoke(FitMainWindow);
         timer.Tick += async (_, _) =>
         {
             if (state.Current == DictationState.Recording)
@@ -222,13 +244,11 @@ public sealed class MainForm : Form
         var row = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill, WrapContents = true, Margin = new Padding(0, 4, 0, 4) };
         row.Controls.AddRange(children); return row;
     }
-    // Sprint C (T2a): Zeile 2 des Layouts trägt die gezeichnete Leiste „Bereiche“ und darunter die Seiten ohne native Kopfzeile.
-    private Panel BuildTabArea()
+    private void FitMainWindow()
     {
-        var area = new Panel { Dock = DockStyle.Fill, Margin = Padding.Empty };
-        var strip = new GardenTabStrip(tabs) { AccessibleName = "Bereiche" };
-        area.Controls.Add(tabs); area.Controls.Add(strip);
-        return area;
+        BrandTheme.FitToWorkingArea(this);
+        var area = Screen.FromControl(this).WorkingArea;
+        Location = new Point(Math.Clamp(Left, area.Left, Math.Max(area.Left, area.Right - Width)), Math.Clamp(Top, area.Top, Math.Max(area.Top, area.Bottom - Height)));
     }
     // Sprint C (T2b, T3): eine einzige Scrollebene mit zwei Karten; der Hinweis bricht in der Kartenbreite um statt fest.
     private GardenScrollFlow BuildSettingsPage()
@@ -274,21 +294,22 @@ public sealed class MainForm : Form
         pending = Directory.GetFiles(AppPaths.Audio, "recording-*.wav").OrderByDescending(File.GetLastWriteTimeUtc).FirstOrDefault();
         state.HasPendingAudio = pending != null;
         LoadRecovery();
-        bool registered = hotkey.TryRegister(settings.EffectiveHotkey);
+        bool registered = MoonshineDiagnostics.WindowCheckMode || hotkey.TryRegister(settings.EffectiveHotkey);
         state.Move(DictationState.Setup); UpdateUi("Modell wird geprüft …");
         try { await RefreshModelAsync(CancellationToken.None); }
         catch { modelReady = false; modelChecked = true; }
+        if(exiting||IsDisposed)return;
         state.Move(pending == null ? DictationState.Ready : DictationState.Error);
         UpdateUi(pending != null ? "Unterbrochene Aufnahme gefunden – wiederholen oder verwerfen." : modelReady ? "Bereit" : ModelNotice());
         if (!registered) UpdateUi("Hotkey ist belegt. Bitte eine andere Kombination einstellen.");
         if (state.HasUncopiedText) UpdateUi(recoveryUnavailable ? "Gesichertes Ergebnis kann nicht entschlüsselt werden. Datei bleibt erhalten; erneut laden oder bewusst verwerfen." : RestoredTranscriptNotice);
-        reading.SetHotkeyAvailable(readingHotkey.TryRegister(new HotkeySpec(3, 86)));
-        if (File.Exists(SpeechRuntime.VoicePath)) _ = reading.PrepareAsync();
+        reading.SetHotkeyAvailable(!MoonshineDiagnostics.WindowCheckMode && readingHotkey.TryRegister(new HotkeySpec(3, 86)));
+        if (File.Exists(SpeechRuntime.VoicePath)) _ = reading.WarmAsync();
     }
     // S3: three outcomes instead of two. A locked or denied model file is not a missing one.
     private enum ModelAvailability { Ready, Missing, Blocked }
-    private const string ModelBlockedText = "Das Sprachmodell ist momentan nicht lesbar. Vermutlich hält gerade ein anderes Programm die Datei. Bitte in einem Moment erneut versuchen; ein neuer Download ist nicht nötig.";
-    private const string ModelMissingText = "Einmalig das Sprachmodell herunterladen.";
+    private const string ModelBlockedText = "Moonshine ist momentan nicht bereit. Bitte erneut prüfen. Bei wiederholtem Fehler Sprachgarten neu starten.";
+    private const string ModelMissingText = "Moonshine-Laufzeit prüfen.";
     // Sprint E (B1): In diesen Zuständen heißt der Knopf „Text kopieren und freigeben“ (UpdateUi). Benannt, weil zwei der drei Stellen im Prüflauf nicht erreichbar sind.
     private const string RestoredResultNotice = "Ergebnis wiederhergestellt. „Text kopieren und freigeben“ wählen oder verwerfen.";
     private const string RestoredTranscriptNotice = "Noch nicht kopiertes Transkript wiederhergestellt. „Text kopieren und freigeben“ wählen oder verwerfen.";
@@ -303,29 +324,11 @@ public sealed class MainForm : Form
         if (modelBlocked) return ModelBlockedText;
         return ModelMissingText;
     }
-    private static async Task<ModelAvailability> ProbeModelAsync(CancellationToken token)
+    private async Task<ModelAvailability> ProbeModelAsync(CancellationToken token)
     {
-        string path = AppPaths.Model;
-        if (!File.Exists(path)) return ModelAvailability.Missing;
-        try
-        {
-            // Cheap open probe first: only a readable file is worth hashing 488 MB for.
-            using var probe = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
-        }
-        catch (FileNotFoundException) { return ModelAvailability.Missing; }
-        catch (DirectoryNotFoundException) { return ModelAvailability.Missing; }
-        catch (IOException) { return ModelAvailability.Blocked; }
-        catch (UnauthorizedAccessException) { return ModelAvailability.Blocked; }
-        try
-        {
-            if (await ModelStore.VerifyAsync(path, token)) return ModelAvailability.Ready;
-            return ModelAvailability.Missing;
-        }
+        try { await transcriber.PrepareAsync(token); return ModelAvailability.Ready; }
         catch (OperationCanceledException) { throw; }
-        catch (FileNotFoundException) { return ModelAvailability.Missing; }
-        catch (DirectoryNotFoundException) { return ModelAvailability.Missing; }
-        catch (IOException) { return ModelAvailability.Blocked; }
-        catch (UnauthorizedAccessException) { return ModelAvailability.Blocked; }
+        catch { return ModelAvailability.Blocked; }
     }
     private async Task<ModelAvailability> RefreshModelAsync(CancellationToken token)
     {
@@ -398,9 +401,15 @@ public sealed class MainForm : Form
         }
         if (!modelReady && modelBlocked) { await RecheckModelAsync(); return; }
         if (!modelReady) { Notice("Bitte zuerst das Modell einrichten."); return; }
+        using var startLease = activities.TryEnter("Diktat wird gestartet");
+        if (startLease == null) return;
+        await reading.StopWarmupAsync();
+        if (exiting || startLease.Token.IsCancellationRequested || !state.CanStart) return;
         pending = Path.Combine(AppPaths.Audio, $"recording-{Guid.NewGuid():N}.wav");
         try
         {
+            await transcriber.BeginAsync(startLease.Token);
+            if (exiting || startLease.Token.IsCancellationRequested) { await transcriber.AbortAsync(); return; }
             audio.Start(settings.DeviceId, pending);
             state.Move(DictationState.Recording); state.HasPendingAudio = true; recordingTime.Restart();
             UpdateUi("Aufnahme läuft"); overlay.SetStatus($"● Aufnahme · {settings.EffectiveHotkey} zum Stoppen", true);
@@ -408,6 +417,7 @@ public sealed class MainForm : Form
         catch
         {
             // S5: reach the reported state first; a failing cleanup must not skip it or leave ToggleAsync.
+            await transcriber.AbortAsync();
             string? orphan = pending;
             pending = null;
             state.HasPendingAudio = false;
@@ -421,9 +431,10 @@ public sealed class MainForm : Form
     }
     private async Task StopAndProcessAsync()
     {
+        stopToResult.Restart();
         state.Move(DictationState.Stopping); UpdateUi("Aufnahme wird beendet …"); recordingTime.Stop();
         try { await audio.StopAsync(); await ProcessPendingAsync(); }
-        catch (Exception ex) { state.Move(DictationState.Error); Notice(FailureNotice(ex)); }
+        catch (Exception ex) { await transcriber.AbortAsync(); state.Move(DictationState.Error); Notice(FailureNotice(ex)); }
     }
     private async Task DeviceStoppedAsync(Exception? error)
     {
@@ -431,23 +442,28 @@ public sealed class MainForm : Form
         state.Move(DictationState.Stopping); recordingTime.Stop();
         try { await audio.StopAsync(); } catch { }
         state.Move(DictationState.Error);
+        await transcriber.AbortAsync();
         Notice("Mikrofonaufnahme unterbrochen. Vorhandene Aufnahme wiederholen oder verwerfen.");
     }
     private async Task ProcessPendingAsync()
     {
         if (pending == null || state.Current is not (DictationState.Error or DictationState.Stopping) || !modelReady) return;
-        state.Move(DictationState.Transcribing); UpdateUi("Wird lokal transkribiert …"); overlay.SetStatus("… Wird lokal transkribiert", false);
+        if (!transcriber.HasActiveStream) stopToResult.Restart();
+        state.Move(DictationState.Transcribing); UpdateUi("Moonshine beendet die Erkennung …"); overlay.SetStatus("… Wird lokal transkribiert", false);
         operation = new CancellationTokenSource();
         string pcm = pending + ".pcm.wav";
         try
         {
+            await reading.StopWarmupAsync();
             var stats = await Task.Run(() => AudioRecorder.ConvertToPcm(pending, pcm, operation.Token), operation.Token);
             operation.Token.ThrowIfCancellationRequested();
             if (!stats.HasSignal) { state.Move(DictationState.Error); Notice("Keine ausreichend deutliche Aufnahme. Zwischenablage unverändert. Wiederholen oder verwerfen."); return; }
             var availability = await RefreshModelAsync(operation.Token);
             if (availability == ModelAvailability.Blocked) throw new InvalidDataException(ModelBlockedText + " Aufnahme bleibt erhalten.");
-            if (availability == ModelAvailability.Missing) throw new InvalidDataException("Modell fehlt oder ist beschädigt. Bitte erneut herunterladen; Aufnahme bleibt erhalten.");
-            var result = await transcriber.TranscribeAsync(AppPaths.Model, pcm, operation.Token);
+            if (availability == ModelAvailability.Missing) throw new InvalidDataException("Die Spracherkennung ist unvollständig. Bitte das vollständige Sprachgarten-Paket erneut entpacken; Aufnahme bleibt erhalten.");
+            var result = transcriber.HasActiveStream
+                ? await transcriber.FinishAsync(operation.Token)
+                : await transcriber.TranscribeAsync(AppPaths.Model, pcm, operation.Token);
             if (string.IsNullOrWhiteSpace(result.Text)) { state.Move(DictationState.Error); Notice("Keine Sprache erkannt. Zwischenablage unverändert. Aufnahme wiederholen oder verwerfen."); return; }
             string corrected = replacements == null ? result.Text : CorrectionEngine.Apply(result.Text, replacements.Rules);
             SetTranscript(corrected); recognitionSource = result.Text;
@@ -457,12 +473,13 @@ public sealed class MainForm : Form
             bool copied = await UnicodeClipboard.CopyAsync(hotkey.Handle, corrected, operation.Token);
             if (copied) { RecoveryStore.Clear(); state.HasUncopiedText = false; }
             state.Move(DictationState.Result);
-            Notice(copied ? $"Text kopiert{(corrected != result.Text ? " · Ersetzungen angewendet" : "")} · {result.Seconds:F1} s Verarbeitung · Mit Strg+V einfügen" : ClipboardBusyNotice);
+            Notice(copied ? $"Text kopiert{(corrected != result.Text ? " · Ersetzungen angewendet" : "")} · {stopToResult.Elapsed.TotalSeconds:F2} s nach Stopp · Mit Strg+V einfügen" : ClipboardBusyNotice);
         }
         catch (OperationCanceledException) { state.Move(DictationState.Error); Notice(state.HasUncopiedText ? "Abgebrochen. Transkript bleibt zum Kopieren erhalten." : "Abgebrochen. Aufnahme bleibt für Wiederholen oder Verwerfen erhalten."); }
         catch (Exception ex) { state.Move(DictationState.Error); Notice(FailureNotice(ex)); }
         finally
         {
+            await transcriber.AbortAsync();
             try { AppPaths.DeleteOwned(pcm); } catch (IOException) { Notice("Temporäre Audiodatei noch gesperrt; Bereinigung beim Neustart."); }
             finally { operation.Dispose(); operation = null; UpdateUi(); }
         }
@@ -474,6 +491,7 @@ public sealed class MainForm : Form
         {
             state.Move(DictationState.Stopping); recordingTime.Stop(); UpdateUi("Aufnahme wird beendet …");
             try { await audio.StopAsync(); } catch { }
+            await transcriber.AbortAsync();
             state.Move(DictationState.Error); Notice("Aufnahme angehalten. Wiederholen oder bewusst verwerfen.");
         }
         else operation?.Cancel();
@@ -548,14 +566,14 @@ public sealed class MainForm : Form
         state.HasUncopiedText = true;
         try { RecoveryStore.Save(transcript.Text); editSaveFailed = false; state.HasUncopiedText = !string.IsNullOrWhiteSpace(transcript.Text); }
         catch { editSaveFailed = true; }
-        UpdateUi(editSaveFailed ? "Korrektur nur im Fenster – Speichern fehlgeschlagen. Bitte nicht schließen; erneut übernehmen." : "Text geändert · „Korrektur übernehmen“ oder Strg+Enter drücken.");
+        UpdateUi(editSaveFailed ? "Korrektur nur im Fenster – Speichern fehlgeschlagen. Bitte nicht schließen; erneut übernehmen." : "Text geändert · „Korrektur übernehmen und kopieren“ oder Strg+Enter drücken.");
     }
     private void RefreshRules()
     {
         ruleList.Items.Clear();
         if (replacements != null) foreach (var rule in replacements.Rules) ruleList.Items.Add(new ListViewItem([rule.From, rule.To]));
         rulesHint.Text = replacements == null ? "Regeln konnten nicht geladen werden. Die vorhandene Datei bleibt unverändert. Automatische Ersetzungen sind derzeit ausgesetzt." :
-            replacements.Rules.Count == 0 ? "Noch keine Ersetzungen gespeichert. Korrigiere im Bereich Diktat eine falsch erkannte Stelle und wähle „Korrektur übernehmen“. Danach kannst du dir diese Ersetzung merken lassen." :
+            replacements.Rules.Count == 0 ? "Noch keine Ersetzungen gespeichert. Korrigiere im Bereich Diktat eine falsch erkannte Stelle und wähle „Korrektur übernehmen und kopieren“. Danach kannst du dir diese Ersetzung merken lassen." :
             $"{replacements.Rules.Count} von {ReplacementStore.MaxRules} Ersetzungen · nur nach deiner Bestätigung gespeichert. Exakte Schreibweise, ganze Wörter/Wortfolgen, keine Kettenersetzung. Die Regeln bleiben lokal und sind mit deinem Windows-Konto verschlüsselt.";
     }
     private void RemoveRule()
@@ -566,44 +584,42 @@ public sealed class MainForm : Form
         try { replacements.Remove(from); RefreshRules(); UpdateUi("Ersetzung gelöscht. Bereits vorhandener Text bleibt unverändert."); }
         catch { UpdateUi("Ersetzung konnte nicht gelöscht werden. Bisherige Regel bleibt erhalten."); }
     }
-    private async Task DownloadModelAsync()
-    {
-        if (state.Busy) return;
-        state.Move(DictationState.Setup); operation = new(); UpdateUi("Modell wird heruntergeladen …");
-        try
-        {
-            await ModelStore.DownloadAsync(AppPaths.InstalledModel, new Progress<int>(p => { progress.Value = p; modelLabel.Text = $"Sprachmodell: {p} % von 488 MB"; }), operation.Token);
-            modelReady = true; modelBlocked = false; state.Move(pending == null ? DictationState.Ready : DictationState.Error); Notice("Modell geprüft. Offline-Erkennung ist eingerichtet.");
-        }
-        catch (OperationCanceledException) { state.Move(DictationState.Error); Notice("Download abgebrochen. Erneut herunterladen ist möglich."); }
-        catch { state.Move(DictationState.Error); Notice("Modelldownload fehlgeschlagen. Internetverbindung und freien Speicher prüfen, dann erneut versuchen."); }
-        finally { operation.Dispose(); operation = null; UpdateUi(); }
-    }
+    private async Task DownloadModelAsync() => await RecheckModelAsync();
     private void ChangeHotkey()
     {
         if (state.Busy) return;
         var built = CreateHotkeyDialog();
         using var dialog = built.Dialog;
         var hint = built.Hint;
-        dialog.KeyDown += (_, e) =>
+        var suggestion = (GardenButton)dialog.Controls["suggestHotkey"]!;
+        HotkeySpec? available = HotkeyWindow.FindAvailable();
+        suggestion.Enabled = available != null;
+        suggestion.Text = available != null ? $"Vorschlag verwenden: {available}" : "Kein freier Vorschlag – eigene Kombination drücken";
+        void ApplyHotkey(HotkeySpec candidate)
         {
-            e.SuppressKeyPress = true;
-            if (e.KeyCode == Keys.Escape) { dialog.Close(); return; }
-            var candidate = new HotkeySpec((uint)((e.Alt ? 1 : 0) | (e.Control ? 2 : 0) | (e.Shift ? 4 : 0)), (uint)e.KeyCode);
-            if (!candidate.IsValid) return;
-            if (!hotkey.TryRegister(candidate)) { hint.Text = "Diese Kombination ist bereits belegt.\nBitte eine andere Kombination drücken."; return; }
+            if (!hotkey.TryRegister(candidate)) { hint.Text = "Diese Kombination ist inzwischen belegt.\nBitte eine andere Kombination drücken."; return; }
             var old = settings; settings = settings with { Hotkey = candidate };
             try { settings.Save(AppPaths.Settings); dialog.Close(); UpdateUi("Hotkey gespeichert."); }
-            catch { settings = old; hotkey.TryRegister(old.EffectiveHotkey); hint.Text = "Speichern fehlgeschlagen. Bisheriger Hotkey bleibt aktiv."; }
+            catch { settings = old; bool restored = hotkey.TryRegister(old.EffectiveHotkey); hint.Text = restored ? "Speichern fehlgeschlagen. Bisheriger Hotkey bleibt aktiv." : "Speichern fehlgeschlagen. Bitte erneut ein Tastenkürzel wählen."; }
+        }
+        suggestion.Click += (_, _) => { if (available != null) ApplyHotkey(available); };
+        dialog.KeyDown += (_, e) =>
+        {
+            if (e.KeyCode == Keys.Escape) { e.SuppressKeyPress = true; dialog.Close(); return; }
+            var candidate = new HotkeySpec((uint)((e.Alt ? 1 : 0) | (e.Control ? 2 : 0) | (e.Shift ? 4 : 0)), (uint)e.KeyCode);
+            if (!candidate.IsValid) return;
+            e.SuppressKeyPress = true; ApplyHotkey(candidate);
         };
         dialog.ShowDialog(this);
     }
     // Sprint C (S17): Farben kommen aus BrandTheme.Apply und folgen damit dem Hochkontrastmodus.
     private static (Form Dialog, Label Hint) CreateHotkeyDialog()
     {
-        var dialog = new Form { Text = "Tastenkombination ändern", ClientSize = new Size(540, 210), AutoScaleMode = AutoScaleMode.Dpi, Font = BrandTheme.Body, Icon = BrandTheme.Icon, StartPosition = FormStartPosition.CenterParent, KeyPreview = true, MinimizeBox = false, MaximizeBox = false };
+        var dialog = new Form { Text = "Tastenkombination ändern", ClientSize = new Size(600, 280), MinimumSize = new Size(500, 260), AutoScaleMode = AutoScaleMode.Dpi, Font = BrandTheme.Body, Icon = BrandTheme.Icon, StartPosition = FormStartPosition.CenterParent, KeyPreview = true, MinimizeBox = false, MaximizeBox = false };
         var hint = new Label { Text = "Gewünschte Kombination drücken:\nStrg oder Alt + Leertaste, A–Z oder F1–F11.\nEscape schließt dieses Fenster.", AutoSize = true, Location = new Point(20, 20) };
         dialog.Controls.Add(hint);
+        hint.MaximumSize = new Size(550, 0);
+        dialog.Controls.Add(new GardenButton { Name = "suggestHotkey", Text = "Verfügbares Tastenkürzel vorschlagen", Dock = DockStyle.Bottom, Height = 78 });
         BrandTheme.Apply(dialog);
         return (dialog, hint);
     }
@@ -652,6 +668,7 @@ public sealed class MainForm : Form
         modelDownload.Enabled = interactive && !modelReady && !modelBlocked; settingsButton.Enabled = interactive; refresh.Enabled = interactive; microphones.Enabled = interactive;
         copy.Enabled = interactive && !string.IsNullOrWhiteSpace(transcript.Text) && !recoveryUnavailable;
         copy.Text = state.HasUncopiedText ? "Text kopieren und freigeben" : "Erneut kopieren";
+        copy.Visible = applyCorrection.Visible = !string.IsNullOrEmpty(transcript.Text);
         copy.Primary = state.HasUncopiedText;
         applyCorrection.Enabled = copy.Enabled && editsDirty;
         transcript.ReadOnly = !interactive || recoveryUnavailable || pending != null;
@@ -659,12 +676,22 @@ public sealed class MainForm : Form
         reloadRecovery.Enabled = interactive;
         tray.Text = "Sprachgarten · " + stateSummary.Text.TrimStart('●', ' ');
         if (activities.Busy) tray.Text = "Sprachgarten · " + activities.Label;
-        if (state.Current != DictationState.Recording) { level.Value = 0; duration.Text = "Maximal 5 Minuten pro Aufnahme"; }
-        if (modelReady) modelLabel.Text = "Whisper Small · SHA-256 geprüft · Offline verfügbar";
-        else if (!modelChecked) modelLabel.Text = "Whisper Small wird geprüft …";
+        if (state.Current != DictationState.Recording) { level.Value = 0; duration.Text = !toggle.Enabled ? block ?? stateSummary.Text.TrimStart('●', ' ') : "Maximal 5 Minuten pro Aufnahme"; }
+        if (modelReady) modelLabel.Text = "Moonshine Deutsch Small Streaming · SHA-256 geprüft · Offline bereit";
+        else if (!modelChecked) modelLabel.Text = "Moonshine Deutsch wird vorbereitet …";
         else if (state.Current == DictationState.Setup) { }
-        else if (modelBlocked) modelLabel.Text = "Whisper Small ist momentan nicht lesbar · kein neuer Download nötig";
-        else modelLabel.Text = "Whisper Small fehlt oder ist ungültig · 488 MB Download";
+        else if (modelBlocked) modelLabel.Text = "Moonshine ist momentan nicht bereit · erneut prüfen";
+        else modelLabel.Text = "Moonshine-Laufzeit fehlt oder ist ungültig";
+        showOnboarding = !modelReady && !state.HasPendingAudio && !state.HasUncopiedText && !recoveryUnavailable && string.IsNullOrEmpty(transcript.Text);
+        onboarding.Visible = showOnboarding; transcript.Visible = !showOnboarding;
+        onboarding.Action.Text = modelBlocked ? "Erneut prüfen" : "Spracherkennung prüfen";
+        onboarding.Action.Enabled = interactive && modelChecked;
+        onboarding.Hotkey.Enabled = settingsButton.Enabled;
+        onboarding.Hotkey.Text = hotkey.Registered == null ? "Optional: Tastenkürzel ändern" : "Tastenkürzel: " + hotkey.Registered;
+        bool downloading = state.Current == DictationState.Setup && operation != null;
+        onboarding.Hint.Text = downloading ? "Die Spracherkennung wird vorbereitet.\nDu kannst die Vorbereitung oben abbrechen." : !modelChecked ? "Das enthaltene Moonshine-Modell wird geprüft …" : modelBlocked ? ModelBlockedText : "Moonshine ist mit dieser Ausgabe enthalten und arbeitet offline.\nBei wiederholtem Fehler das vollständige Sprachgarten-Paket erneut entpacken.";
+        onboarding.Progress.Visible = downloading;
+        editHint.Visible = !string.IsNullOrEmpty(transcript.Text);
         resizeDictation?.Invoke();
     }
     private string? StartBlockReason()
@@ -679,7 +706,7 @@ public sealed class MainForm : Form
                     : "Ein vorheriger Text wartet noch. Bitte „Text kopieren und freigeben“ wählen und den Text bei Bedarf mit Strg+V sichern. Danach ist eine neue Aufnahme möglich.";
         if (state.HasPendingAudio) return "Eine unterbrochene Aufnahme wartet. Bitte erneut transkribieren oder bewusst verwerfen, bevor du neu aufnimmst.";
         if (!modelReady && modelBlocked) return ModelBlockedText;
-        if (!modelReady) return "Das Sprachmodell ist noch nicht verfügbar. Bitte unter „Einstellungen“ das Modell einrichten.";
+        if (!modelReady) return "Zum Diktieren bitte zuerst „Spracherkennung prüfen“ wählen.";
         return null;
     }
     // S13/T1: a held exit has to be readable, so the window comes back if it was hidden or minimised.
@@ -773,7 +800,8 @@ public sealed class MainForm : Form
         {
             if (!FlushAreas("Beenden angehalten: Ein Ergebnis ist noch nicht gesichert.")) return;
             if (!PersistUncopiedTextBeforeExit()) return;
-            exiting = true; operation?.Cancel(); activities.Cancel();
+            exiting = true; operation?.Cancel(); activities.Cancel(); reading.Stop();
+            await reading.StopWarmupAsync();
             if (audio.IsRecording) { try { await audio.StopAsync(); } catch { } }
             // Let the processing finally release/kill its worker before disposing the UI.
             while (operation != null || activities.Busy) await Task.Delay(50);
@@ -784,7 +812,7 @@ public sealed class MainForm : Form
     }
     protected override void Dispose(bool disposing)
     {
-        if (disposing) { readingHotkey.Dispose(); reading.Dispose(); timer.Dispose(); audio.Dispose(); hotkey.Dispose(); tray.Dispose(); overlay.Dispose(); operation?.Dispose(); }
+        if (disposing) { transcriber.Dispose(); readingHotkey.Dispose(); reading.Dispose(); timer.Dispose(); audio.Dispose(); hotkey.Dispose(); tray.Dispose(); overlay.Dispose(); operation?.Dispose(); }
         base.Dispose(disposing);
     }
 }

@@ -1,0 +1,10 @@
+{
+  "originalRepository": "Qwen/Qwen3-4B-Instruct-2507",
+  "bytes": 2497280448,
+  "file": "Qwen3-4B-Instruct-2507-Q4_K_M.gguf",
+  "originalRevision": "cdbee75f17c01a7cc42f958dc650907174af0554",
+  "sha256": "8cdb57cbb880d313736a9bc4e3d3d2485f145b5e19cf33783746e753e82641fc",
+  "conversionRevision": "4edb920b6f14e3b9284d4502a6485103d72cde05",
+  "conversionRepository": "lmstudio-community/Qwen3-4B-Instruct-2507-GGUF",
+  "license": "apache-2.0"
+}

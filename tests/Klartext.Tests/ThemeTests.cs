@@ -101,28 +101,14 @@ internal static class ThemeTests
     // Sprint C, Prüffälle 1 bis 4 aus Abschnitt 8: Reiterleiste einzeilig, Beschriftungen passen, native Kopfzeile ersetzt, Marke ohne Fokus.
     private static void CheckTabStrip(Control host, GardenTabs tabs, int width, float dpiScale)
     {
-        var strip = Descendants(host).OfType<GardenTabStrip>().Single(s => s.AccessibleName == "Bereiche");
-        var rects = Enumerable.Range(0, strip.TabCount).Select(strip.GetTabBounds).ToArray();
-        bool sameRow = rects.Length == 7 && rects.All(r => r.Height == rects[0].Height);
-        bool inside = rects.All(r => strip.ClientRectangle.Contains(r));
-        bool apart = rects.Zip(rects.Skip(1)).All(p => !p.First.IntersectsWith(p.Second));
-        Check($"tab-strip-all-tabs-visible-{width}", sameRow && inside && apart,
-            new { rects, strip = strip.ClientSize, stripHeight = strip.Height, expectedHeight = (int)(BrandTheme.TabStripHeight * dpiScale), rows = rects.Select(r => r.Top).Distinct().Count() });
-        int minimum = (int)Math.Ceiling(2 * 8 * dpiScale);
-        var labels = rects.Select((r, i) => new { text = tabs.TabPages[i].Text, tab = r.Width, measured = TextRenderer.MeasureText(tabs.TabPages[i].Text, strip.TabFont).Width }).ToArray();
-        Check($"tab-labels-fit-{width}", labels.All(l => l.measured + minimum <= l.tab) && strip.TabFont.Name == "Indie Flower",
-            new { font = strip.UsesSmallFont ? "BrandTheme.Small" : "BrandTheme.Body", strip.TabFont.SizeInPoints, paddingLogical = strip.TabPadding, minimum, labels });
-        tabs.SelectedIndex = 0; host.PerformLayout();
-        using var image = RenderClipped(host);
-        var origin = host.PointToClient(strip.PointToScreen(Point.Empty));
-        var last = rects[^1]; var first = rects[0];
-        var right = image.GetPixel(Math.Min(image.Width - 1, origin.X + last.Right + (strip.ClientSize.Width - last.Right) / 2), origin.Y + last.Height / 2);
-        Check($"tab-strip-replaces-native-header-{width}", tabs.DisplayRectangle == tabs.ClientRectangle && Near(right, BrandTheme.Cream, 2),
-            new { display = tabs.DisplayRectangle, client = tabs.ClientRectangle, rightOfLastTab = right.Name, freeWidth = strip.ClientSize.Width - last.Right });
-        var marker = image.GetPixel(origin.X + first.Left + first.Width / 2, origin.Y + first.Bottom - (int)Math.Ceiling(2 * dpiScale));
-        var fill = image.GetPixel(origin.X + first.Left + (int)Math.Ceiling(4 * dpiScale), origin.Y + first.Height / 2);
-        Check($"selected-tab-marker-without-focus-{width}", !strip.Focused && Near(marker, BrandTheme.Petrol) && Near(fill, BrandTheme.Mustard),
-            new { focused = strip.Focused, marker = marker.Name, fill = fill.Name });
+        var nav = Descendants(host).OfType<GardenNavigation>().Single();
+        var items = nav.Items;
+        Check($"navigation-seven-native-items-{width}", items.Count == 7 && items.All(b => b.AccessibilityObject.Role == AccessibleRole.RadioButton && b.AccessibilityObject.Name == b.Text));
+        using var g = nav.CreateGraphics();
+        Check($"navigation-labels-fit-{width}", items.All(b => b.Left >= 0 && b.Right <= nav.ClientSize.Width && TextRenderer.MeasureText(g, b.Text, b.Font, Size.Empty, TextFormatFlags.SingleLine).Width <= b.Width - b.Padding.Horizontal));
+        Check($"page-uses-full-content-area-{width}", tabs.DisplayRectangle == tabs.ClientRectangle);
+        tabs.SelectedIndex = 0;
+        Check($"selection-synchronized-without-focus-{width}", items.Count(b => b.Checked) == 1 && items[0].Checked);
     }
     // Sprint C, Prüffall 6: Das Transkript wächst ohne eigenen Scrollbalken, die Diktatseite scrollt.
     private static void CheckGrowingTranscript(MainForm form, Control host, GardenTextBox transcript, int width)
@@ -341,21 +327,23 @@ internal static class ThemeTests
     {
         var mounted = MountMainForm(new Size(900, 740));
         using var form = mounted.Form; using var host = mounted.Host; var tabs = mounted.Tabs;
-        var strip = Descendants(host).OfType<GardenTabStrip>().Single(s => s.AccessibleName == "Bereiche");
-        var mouseDown = typeof(GardenTabStrip).GetMethod("OnMouseDown", BindingFlags.Instance | BindingFlags.NonPublic)!;
-        var keyDown = typeof(GardenTabStrip).GetMethod("OnKeyDown", BindingFlags.Instance | BindingFlags.NonPublic)!;
-        var steps = new List<object>(); bool ok = true;
-        void Step(string name, Action act, int expected) { act(); ok &= tabs.SelectedIndex == expected; steps.Add(new { name, expected, actual = tabs.SelectedIndex }); }
+        var nav = Descendants(host).OfType<GardenNavigation>().Single();
+        bool ok = true;
+        foreach (var item in nav.Items)
+        {
+            item.AccessibilityObject.DoDefaultAction();
+            ok &= ReferenceEquals(tabs.SelectedTab, item.Tag) && item.Checked && nav.Items.Count(b => b.Checked) == 1;
+        }
+        tabs.SelectedIndex = 3;
+        Check("navigation-accessible-actions-and-external-selection", ok && nav.Items.Single(b => b.Text == "Audiodateien").Checked);
+        var process = typeof(GardenNavigation).GetMethod("ProcessCmdKey", BindingFlags.Instance | BindingFlags.NonPublic)!;
         tabs.SelectedIndex = 0;
-        var target = strip.GetTabBounds(3); var center = new Point(target.X + target.Width / 2, target.Y + target.Height / 2);
-        Step("Klick Reitermitte 3", () => mouseDown.Invoke(strip, [new MouseEventArgs(MouseButtons.Left, 1, center.X, center.Y, 0)]), 3);
-        Step("Links", () => keyDown.Invoke(strip, [new KeyEventArgs(Keys.Left)]), 2);
-        Step("Rechts", () => keyDown.Invoke(strip, [new KeyEventArgs(Keys.Right)]), 3);
-        Step("Pos1", () => keyDown.Invoke(strip, [new KeyEventArgs(Keys.Home)]), 0);
-        Step("Ende", () => keyDown.Invoke(strip, [new KeyEventArgs(Keys.End)]), tabs.TabPages.Count - 1);
-        Step("Strg+Tab", () => keyDown.Invoke(strip, [new KeyEventArgs(Keys.Control | Keys.Tab)]), 0);
-        Step("Strg+Umschalt+Tab", () => keyDown.Invoke(strip, [new KeyEventArgs(Keys.Control | Keys.Shift | Keys.Tab)]), tabs.TabPages.Count - 1);
-        Check("tab-strip-click-and-keys-switch-tabs", ok && strip.HitTest(center) == 3, new { center, steps });
+        bool forward = (bool)process.Invoke(nav, new object[] { default(Message), Keys.Control | Keys.Tab })!;
+        Check("navigation-ctrl-tab", forward && tabs.SelectedTab!.Text == "Audiodateien");
+        bool backward = (bool)process.Invoke(nav, new object[] { default(Message), Keys.Control | Keys.Shift | Keys.Tab })!;
+        Check("navigation-ctrl-shift-tab", backward && tabs.SelectedTab!.Text == "Diktat");
+        process.Invoke(nav, new object[] { default(Message), Keys.Control | Keys.Shift | Keys.Tab });
+        Check("navigation-keyboard-wrap", tabs.SelectedTab!.Text == "Einstellungen");
     }
     public static int Run(string projectRoot)
     {
@@ -453,7 +441,7 @@ internal static class ThemeTests
                 var headerImages = Descendants(host).OfType<GardenImage>().ToArray();
                 Check($"brand-images-fit-{size.Width}", headerImages.All(i => i.Right <= i.Parent!.ClientSize.Width && i.Bottom <= i.Parent.ClientSize.Height));
                 Check($"header-labels-clear-of-wordmark-{size.Width}", headerImages.Where(i => i.AccessibleName == "Sprachgarten").All(i => i.Parent!.Controls.OfType<Label>().All(l => !i.Bounds.IntersectsWith(l.Bounds))));
-                var mainButtons = Descendants(host).OfType<Button>().Where(b => b.Text is "Aufnahme starten" or "Korrektur übernehmen" or "Erneut kopieren" or "Im Hintergrund weiterlaufen" or "Beenden");
+                var mainButtons = Descendants(host).OfType<Button>().Where(b => b.Text is "Aufnahme starten" or "Korrektur übernehmen und kopieren" or "Erneut kopieren" or "Im Hintergrund weiterlaufen" or "Beenden");
                 foreach (var b in mainButtons)
                 {
                     var preferred = b.GetPreferredSize(Size.Empty);
@@ -462,14 +450,14 @@ internal static class ThemeTests
                 // Sprint E (S19): Die Schleife prüft nur, was sie findet; genau fünf Knöpfe müssen gefunden werden.
                 var foundLabels = mainButtons.Select(b => b.Text).ToArray();
                 Check($"button-labels-found-{size.Width}", foundLabels.Length == 5, foundLabels);
-                var footer = Descendants(host).OfType<GardenFooter>().Single();
-                Check($"footer-visible-{size.Width}", footer.Bottom <= footer.Parent!.ClientSize.Height && footer.Controls.OfType<Button>().All(b => b.Bottom <= footer.ClientSize.Height));
+                var footer = Descendants(host).OfType<TableLayoutPanel>().Single(p => p.AccessibleName == "Fensterstatus");
+                Check($"footer-visible-{size.Width}", footer.Bottom <= footer.Parent!.ClientSize.Height && Descendants(footer).OfType<Button>().All(b => footer.ClientRectangle.Contains(footer.RectangleToClient(b.RectangleToScreen(b.ClientRectangle)))));
                 var state = (SessionState)typeof(MainForm).GetField("state", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(form)!;
                 state.Move(DictationState.Error); state.HasPendingAudio = true;
                 typeof(MainForm).GetField("pending", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(form, Path.Combine(AppPaths.Audio, "layout-fixture.wav"));
                 typeof(MainForm).GetMethod("UpdateUi", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(form, ["Die Aufnahme konnte nicht transkribiert werden. Bitte erneut versuchen oder bewusst verwerfen."]);
                 host.PerformLayout();
-                var pendingActions = Descendants(host).OfType<Button>().Where(b => b.Text is "Erneut transkribieren" or "Aufnahme verwerfen").ToArray();
+                var pendingActions = new[] { "retry", "discard" }.Select(name => (Button)typeof(MainForm).GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(form)!).ToArray();
                 Check($"error-actions-reachable-{size.Width}", pendingActions.Length == 2 && pendingActions.All(b => b.Enabled && b.Visible && b.Bottom <= b.Parent!.ClientSize.Height) && footer.Bottom <= footer.Parent!.ClientSize.Height);
                 var frame = text.Parent!;
                 var content = (TableLayoutPanel)frame.Parent!;

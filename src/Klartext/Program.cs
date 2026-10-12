@@ -5,6 +5,8 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
+        if (args.Length == 3 && args[0] == "--moonshine-selftest") return MoonshineDiagnostics.RunAsync(args[1],args[2]).GetAwaiter().GetResult();
+        if (args.Length == 2 && args[0] == "--moonshine-window-check") return MoonshineDiagnostics.WindowCheck(args[1]);
         if (args.Length == 1 && args[0] == "--read-selection") return SelectedText.Run();
         if (args.Length == 5 && args[0] == "--prompt-host") return LocalPromptModel.RunHostAsync(args[1], args[2], args[3], args[4]).GetAwaiter().GetResult();
         if (args.Length == 2 && args[0] == "--verify-prompt-review")

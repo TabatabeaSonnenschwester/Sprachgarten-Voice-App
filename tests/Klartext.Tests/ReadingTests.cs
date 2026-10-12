@@ -41,9 +41,9 @@ internal static class ReadingTests
                 var play = Field<GardenButton>(page, "play");
                 Check("initial-play-disabled", !play.Enabled);
                 input.Text = "Eine kurze künstliche Hörprobe.";
-                Check("text-enables-play", play.Enabled);
+                Check("missing-setup-keeps-play-disabled", !play.Enabled && !Field<GardenButton>(page, "prepare").Enabled && Field<Label>(page, "setupHint").Text.Contains("docs/READING.md"));
                 using (var lease = gate.TryEnter("Diktat-Test")) Check("dictation-blocks-reading", !play.Enabled);
-                Check("gate-release-restores-reading", play.Enabled);
+                Check("gate-release-does-not-bypass-setup", !play.Enabled);
                 using (var picture = new Bitmap(host.ClientSize.Width, host.ClientSize.Height)) { host.DrawToBitmap(picture, host.ClientRectangle); picture.Save(Path.Combine(folder, "reading-800.png")); }
                 Check("actions-within-viewport", Field<GardenButton>(page, "stop").PointToScreen(Point.Empty).Y < host.PointToScreen(new Point(0, host.ClientSize.Height)).Y);
                 page.Visible = false;

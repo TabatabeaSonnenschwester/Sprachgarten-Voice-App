@@ -1,4 +1,4 @@
-param([switch]$Publish, [string]$OutputPath='dist\Sprachgarten-0.4.0-preview.14-win-x64')
+param([switch]$Publish, [string]$OutputPath='dist\Sprachgarten-0.4.0-preview.19-win-x64')
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path $PSScriptRoot -Parent
 Set-Location -LiteralPath $projectRoot

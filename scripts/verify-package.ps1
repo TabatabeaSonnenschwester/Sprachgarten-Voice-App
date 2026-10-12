@@ -1,4 +1,4 @@
-param([string]$Archive='dist\Sprachgarten-0.4.0-preview.14-win-x64.zip', [string]$AudioPath, [string]$PrivateResultPath, [switch]$Prompt, [string]$ExpectedText)
+param([string]$Archive='dist\Sprachgarten-0.4.0-preview.19-win-x64.zip', [string]$AudioPath, [string]$PrivateResultPath, [switch]$Prompt, [string]$ExpectedText, [string]$AsrFixtures)
 $ErrorActionPreference='Stop'
 $projectRoot=Split-Path $PSScriptRoot -Parent
 Set-Location -LiteralPath $projectRoot
@@ -17,8 +17,23 @@ foreach($line in Get-Content -LiteralPath (Join-Path $packageRoot 'SHA256SUMS.tx
     if((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ne $expected) { throw ('Abweichung: '+$relative) }
     $checked++
 }
-$evidence=[ordered]@{Build='0.4.0-preview.14'; Archive=$archivePath; ArchiveSha256=(Get-FileHash -LiteralPath $archivePath).Hash; Extracted=$packageRoot; VerifiedFiles=$checked; Signature=(Get-AuthenticodeSignature -LiteralPath (Join-Path $packageRoot 'Sprachgarten.exe')).Status.ToString(); Timestamp=(Get-Date -Format o)}
+$evidence=[ordered]@{Build=[Diagnostics.FileVersionInfo]::GetVersionInfo((Join-Path $packageRoot 'Sprachgarten.exe')).ProductVersion; Archive=$archivePath; ArchiveSha256=(Get-FileHash -LiteralPath $archivePath).Hash; Extracted=$packageRoot; VerifiedFiles=$checked; Signature=(Get-AuthenticodeSignature -LiteralPath (Join-Path $packageRoot 'Sprachgarten.exe')).Status.ToString(); Timestamp=(Get-Date -Format o)}
+if($AsrFixtures){
+    $report=Join-Path $extractRoot 'synthetic-asr-result.json'
+    $info=[Diagnostics.ProcessStartInfo]::new((Join-Path $packageRoot 'Sprachgarten.exe'))
+    $info.UseShellExecute=$false; $info.CreateNoWindow=$true; $info.WorkingDirectory=$packageRoot
+    foreach($argument in @('--moonshine-selftest',[IO.Path]::GetFullPath($AsrFixtures),$report)){$info.ArgumentList.Add($argument)}
+    $process=[Diagnostics.Process]::Start($info)
+    try{
+        if(!$process.WaitForExit(240000)){$process.Kill($true);throw 'Moonshine-Paketprüfung: Zeitlimit.'}
+        if($process.ExitCode -ne 0){throw ('Moonshine-Paketprüfung fehlgeschlagen: '+$process.ExitCode)}
+        $result=Get-Content -Raw -LiteralPath $report|ConvertFrom-Json
+        if($result.status -ne 'PASS'){throw 'Moonshine-Paketprüfung meldet keinen PASS.'}
+        $evidence.AsrChecks=$result.checks.Count;$evidence.TestKind='synthetic-Moonshine-ASR-no-microphone-no-clipboard'
+    }finally{$process.Dispose()}
+}
 if($AudioPath) {
+    if(Test-Path -LiteralPath (Join-Path $packageRoot 'moonshine-config.json')){throw 'AudioPath prüft historische Whisper-Ausgaben. Für Moonshine AsrFixtures mit synthetischem short.wav und long.wav verwenden.'}
     $info=[Diagnostics.ProcessStartInfo]::new((Join-Path $packageRoot 'Sprachgarten.exe'))
     $info.UseShellExecute=$false; $info.CreateNoWindow=$true; $info.WindowStyle=[Diagnostics.ProcessWindowStyle]::Hidden; $info.WorkingDirectory=$packageRoot
     foreach($argument in @('--worker',(Join-Path $packageRoot 'models\ggml-small.bin'),[IO.Path]::GetFullPath($AudioPath),[IO.Path]::GetFullPath($PrivateResultPath))) { $info.ArgumentList.Add($argument) }

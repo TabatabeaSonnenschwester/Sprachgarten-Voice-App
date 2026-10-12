@@ -20,6 +20,7 @@ public sealed class AudioRecorder : IDisposable
     public long BytesRecorded { get; private set; }
     public bool IsRecording => capture != null;
     public event Action<Exception?>? UnexpectedStop;
+    public event Action<byte[],WaveFormat>? AudioChunk;
     private volatile bool requestedStop;
     public static IReadOnlyList<Microphone> Devices()
     {
@@ -53,6 +54,7 @@ public sealed class AudioRecorder : IDisposable
                         if (capture?.WaveFormat.BitsPerSample == 32)
                             for (int i = 0; i + 3 < args.BytesRecorded; i += 4) peak = Math.Max(peak, Math.Abs(BitConverter.ToSingle(args.Buffer, i)));
                         Peak = Math.Clamp(peak, 0, 1);
+                        if (capture != null && args.BytesRecorded > 0) AudioChunk?.Invoke(args.Buffer.AsSpan(0,args.BytesRecorded).ToArray(),capture.WaveFormat);
                     }
                 }
                 catch (Exception ex) { stopped.TrySetResult(ex); UnexpectedStop?.Invoke(ex); }

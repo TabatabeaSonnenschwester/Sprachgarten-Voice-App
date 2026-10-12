@@ -49,7 +49,24 @@ public sealed class PromptPage : UserControl
     private readonly GardenExpander saveBlock = new("In der Bibliothek speichern");
     private readonly GardenExpander connectionBlock = new("KI-Verbindung");
     private readonly GardenExpander helpBlock = new("Einrichtung / Fehlerhilfe");
-    private readonly GardenExpander supplementsBlock = new("Ergänzungen · freiwillig");
+    private readonly GardenExpander supplementsBlock = new("Ziel, Kontext und Regeln ergänzen");
+    private readonly GardenExpander sourceBlock = new("Ausgangstext ansehen");
+    private readonly GardenExpander reviewBlock = new("Prüfen und ergänzen");
+    private readonly FlowLayoutPanel reviewContent = Column();
+    private readonly GardenExpander moreBlock = new("Weitere Aktionen");
+    private readonly GardenButton openReview = new() { Text = "Prüfen und ergänzen" };
+    private readonly GardenButton openSave = new() { Text = "In Bibliothek speichern" };
+    private readonly GardenButton applyReplacement = new() { Text = "Änderungen übernehmen" };
+    private readonly GardenButton dismissReplacement = new() { Text = "Vorschau verwerfen" };
+    private readonly GardenButton undoReplacement = new() { Text = "Letzte Übernahme rückgängig", Visible = false };
+    private readonly GardenCardFlow replacementPanel = new() { Visible = false, AccessibleName = "Vorschau – noch nicht übernommen" };
+    private readonly GardenTextBox replacementPreview = WorkshopUi.Grow("Vorschau der Übernahme", 6);
+    private readonly Label replacementInfo = WorkshopUi.Hint("");
+    private readonly Label draftStatus = WorkshopUi.Hint("Noch kein Arbeitsentwurf gesichert.");
+    private readonly Label libraryStatus = WorkshopUi.Hint("Noch nicht in der Bibliothek gespeichert.");
+    private PromptDocument? pendingDocument, pendingBasis, undoDocument, undoBasis;
+    private bool draftSaved;
+    internal Func<bool>? ConfirmUndo;
     private readonly System.Windows.Forms.Timer workTimer = new() { Interval = 250 };
     private readonly System.Diagnostics.Stopwatch workClock = new();
     private PromptProgress currentProgress = new("Vorbereiten");
@@ -124,7 +141,8 @@ public sealed class PromptPage : UserControl
         Controls.Add(new GardenTabStrip(views) { AccessibleName = "Erstellung und Bibliothek" });
         importDictation.Click += (_, _) => ImportText(dictation());
         newPrompt.Click += (_, _) => NewPrompt();
-        adoptIdea.Click += (_, _) => { if (CanEdit()) { draft.Text = original.Text; Check(); info.Text = "Text in „Mein Prompt“ übernommen. Dort bearbeiten, kopieren oder speichern."; ShowPrompt(); } };
+        adoptIdea.Text = "Ausgangstext als Vorschau";
+        adoptIdea.Click += (_, _) => QueueReplacement(Document() with { Draft = original.Text }, "Ausgangstext wiederverwenden");
         var flow = Section("Deine Idee", inputColumn);
         flow.Controls.Add(WorkshopUi.Row(importDictation, newPrompt));
         flow.Controls.Add(WorkshopUi.Hint("Text eingeben oder ein Diktat übernehmen. Dein Ausgangstext bleibt erhalten.")); flow.Controls.Add(original);
@@ -148,9 +166,9 @@ public sealed class PromptPage : UserControl
         {
             if (!CanEdit()) return;
             string[] selected = suggestions.Where(s => s.Checked).Select(s => s.Text).ToArray();
-            string composed = Document().Compose() + (selected.Length > 0 ? "\r\n\r\n" + string.Join("\r\n", selected) : "");
+            string composed = (Document() with { Original = draft.Text }).Compose() + (selected.Length > 0 ? "\r\n\r\n" + string.Join("\r\n", selected) : "");
             if (composed.Length > 24000) { info.Text = "Zusammen mehr als 24.000 Zeichen. Bitte Angaben kürzen. Bisheriger Prompt bleibt erhalten."; return; }
-            draft.Text = composed; Check(); info.Text = "Ausgangstext und Ergänzungen stehen jetzt gemeinsam in „Mein Prompt“."; ShowPrompt();
+            QueueReplacement(Document() with { Draft = composed, Original = original.Text.Length == 0 ? draft.Text : original.Text }, "Aktuellen Prompt um Angaben ergänzen");
         };
         flow.Controls.Add(build);
         flow = Section("Mein Prompt", outputColumn);
@@ -202,7 +220,8 @@ public sealed class PromptPage : UserControl
         {
             if (!CanEdit() || candidate.Text.Length == 0) return;
             if (candidateSource == null || candidateSource != draft.Text) { info.Text = "Der Entwurf hat sich geändert oder die App wurde neu gestartet. Erst eine neue Variante erzeugen."; return; }
-            draft.Text = candidate.Text; candidateSource = null; info.Text = "Deine Ergänzungen übernommen. Du kannst weiter bearbeiten, erneut prüfen oder in der Bibliothek speichern."; Check();
+            ApplyDocument(Document() with { Draft = candidate.Text, Original = original.Text.Length == 0 ? draft.Text : original.Text });
+            info.Text = "Ergänzungen bewusst übernommen. Die letzte Übernahme lässt sich in dieser Sitzung rückgängig machen."; Check();
             RefreshActions();
         };
         // Der frühere Umschaltknopf „Einrichtung / Fehlerhilfe …“ ist jetzt die Kopfzeile dieses Blocks.
@@ -211,7 +230,7 @@ public sealed class PromptPage : UserControl
         flow = Section("Fertige Prompts", librarySheet);
         flow.Controls.Add(WorkshopUi.Hint("Gespeicherte Prompts suchen und wiederverwenden. Bis 200 Einträge mit je 20 Versionen; lokal mit deinem Windows-Konto geschützt."));
         flow.Controls.Add(search); flow.Controls.Add(libraryHint); flow.Controls.Add(createFirstPrompt);
-        createFirstPrompt.Click += (_, _) => { views.SelectedIndex = 0; workspace.AutoScrollPosition = Point.Empty; original.Focus(); };
+        createFirstPrompt.Click += (_, _) => { views.SelectedIndex = 0; workspace.AutoScrollPosition = Point.Empty; draft.Focus(); };
         flow.Controls.Add(libraryList); flow.Controls.Add(versions); BrandTheme.RelayWheel(versions);
         // Sprint C, Nachtrag 6b: Der Fluss rechnet sonst mit der vorgegebenen Höhe (33 px bei 150 %), Windows zeichnet die
         // Auswahlliste mit Indie Flower 14 pt aber 53 px hoch; die Vorschau rutschte 11 px unter ihre Unterkante.
@@ -237,6 +256,48 @@ public sealed class PromptPage : UserControl
         };
         try { library = new PromptLibrary(Path.Combine(AppPaths.Root, "prompt-library.bin")); RefreshLibrary(); }
         catch { info.Text = "Bibliothek nicht lesbar. Datei bleibt erhalten; Bibliotheksschreibzugriff gesperrt."; RefreshLibrary(); }
+        // Eine zentrale Arbeitsfläche; die vorhandenen Funktionen bleiben bei Bedarf erreichbar.
+        var sourceSection = sections[0]; var supplementSection = sections[1];
+        var mainSection = sections[2]; var reviewSection = sections[3];
+        sourceSection.Controls.Clear(); sourceSection.Controls.Add(sourceBlock);
+        original.ReadOnly = true;
+        sourceBlock.Controls.Add(original); sourceBlock.Controls.Add(adoptIdea);
+        mainSection.Controls.Clear();
+        mainSection.Controls.Add(WorkshopUi.Hint("Mein Prompt · deine aktuelle, frei bearbeitbare Fassung"));
+        mainSection.Controls.Add(WorkshopUi.Row(importDictation));
+        draft.PlaceholderText = "Hier deinen Prompt schreiben oder ein Diktat übernehmen …";
+        mainSection.Controls.Add(draft);
+        mainSection.Controls.Add(WorkshopUi.Row(copyPrompt, openReview, openSave));
+        mainSection.Controls.Add(draftStatus); mainSection.Controls.Add(libraryStatus);
+        mainSection.Controls.Add(undoReplacement);
+        replacementPreview.ReadOnly = true;
+        replacementPanel.Controls.Add(WorkshopUi.Hint("Vorschau · dein aktueller Prompt oben bleibt unverändert"));
+        replacementPanel.Controls.Add(replacementInfo); replacementPanel.Controls.Add(replacementPreview);
+        replacementPanel.Controls.Add(WorkshopUi.Row(applyReplacement, dismissReplacement));
+        mainSection.Controls.Add(replacementPanel);
+        mainSection.Controls.Add(saveBlock);
+        saveBlock.Header.Visible = false;
+        saveBlock.Visible = false;
+        moreBlock.Controls.Add(WorkshopUi.Row(newPrompt, handoff)); mainSection.Controls.Add(moreBlock);
+        openSave.Click += (_, _) => { saveBlock.Visible = !saveBlock.Visible; saveBlock.Expanded = saveBlock.Visible; if (saveBlock.Visible) title.Focus(); };
+        openReview.Click += (_, _) => { reviewBlock.Expanded = !reviewBlock.Expanded; if (reviewBlock.Expanded) { recheck.Focus(); workspace.ScrollControlIntoView(reviewSection); } };
+        applyReplacement.Click += (_, _) => ApplyPending();
+        dismissReplacement.Click += (_, _) => { ClearPending(); RefreshActions(); };
+        undoReplacement.Click += (_, _) => UndoReplacement();
+        var reviewChildren = reviewSection.Controls.Cast<Control>().Skip(1).ToArray();
+        reviewSection.Controls.Clear(); reviewSection.Controls.Add(reviewBlock); reviewBlock.Controls.Add(reviewContent);
+        reviewContent.Controls.Add(WorkshopUi.Hint("Formale Hinweise · feste Regeln, keine KI"));
+        recheck.Text = "Formale Hinweise prüfen"; reviewContent.Controls.Add(recheck); reviewContent.Controls.Add(findings);
+        reviewContent.Controls.Add(supplementsBlock); build.Text = "Ergänzungen als Vorschau";
+        reviewContent.Controls.Add(WorkshopUi.Hint("Mit KI nach offenen Punkten suchen · freiwillig"));
+        foreach (var child in reviewChildren) reviewContent.Controls.Add(child);
+        reviewBlock.ExpandedChanged += (_, _) => { RefreshActions(); ArrangeWorkspace(); };
+        sourceBlock.ExpandedChanged += (_, _) => ArrangeWorkspace();
+        supplementSection.Parent?.Controls.Remove(supplementSection);
+        inputColumn.Controls.Clear(); outputColumn.Controls.Clear();
+        inputColumn.Controls.Add(mainSection); inputColumn.Controls.Add(sourceSection); inputColumn.Controls.Add(reviewSection);
+        sections.Remove(supplementSection);
+        sections.Remove(mainSection); sections.Insert(0, mainSection);
         LoadDraft();
         saveTimer.Tick += (_, _) => { saveTimer.Stop(); Flush(); };
         workTimer.Tick += (_, _) => UpdateWorkStatus();
@@ -274,67 +335,119 @@ public sealed class PromptPage : UserControl
     private static FlowLayoutPanel Column() => new() { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, FlowDirection = FlowDirection.TopDown, WrapContents = false, Margin = Padding.Empty };
     private void ArrangeWorkspace()
     {
-        if (arranging || sections.Count != 5) return;
+        if (arranging || sections.Count != 4) return;
         arranging = true;
         try
         {
             int gap = (int)(BrandTheme.CardGap * DeviceDpi / 96f);
             int width = Math.Max(260, workspace.ClientSize.Width - SystemInformation.VerticalScrollBarWidth - gap * 2);
-            bool wide = width >= 820 * DeviceDpi / 96f;
-            // Im schmalen Fenster kommt das Ergebnis direkt nach der Idee, vor allen Extras.
-            var promptSection = sections[2];
-            var promptParent = wide ? outputColumn : inputColumn;
-            if (promptSection.Parent != promptParent) promptParent.Controls.Add(promptSection);
-            int promptIndex = wide ? 0 : 1;
-            if (promptParent.Controls.GetChildIndex(promptSection) != promptIndex)
-                promptParent.Controls.SetChildIndex(promptSection, promptIndex);
-            sections[0].TabIndex = 0; promptSection.TabIndex = 1; sections[1].TabIndex = 2; sections[3].TabIndex = 3;
-            columns.FlowDirection = wide ? FlowDirection.LeftToRight : FlowDirection.TopDown;
-            int columnWidth = wide ? (width - gap) / 2 : width;
-            inputColumn.Margin = new Padding(0, 0, wide ? gap : 0, 0);
-            foreach (var section in sections)
+            columns.FlowDirection = FlowDirection.TopDown;
+            inputColumn.Margin = Padding.Empty; outputColumn.Visible = false;
+            for (int i = 0; i < sections.Count; i++)
             {
-                int sectionWidth = section.Parent == librarySheet ? Math.Max(260, libraryWorkspace.ClientSize.Width - SystemInformation.VerticalScrollBarWidth - gap * 2) : columnWidth;
-                section.SuspendLayout();
-                section.MinimumSize = new Size(sectionWidth, 0); section.MaximumSize = new Size(sectionWidth, 0); section.Width = sectionWidth;
-                int inner = sectionWidth - section.Padding.Horizontal - 10;
-                foreach (Control child in section.Controls)
-                {
-                    FitChild(child, inner);
-                    // Sprint C (S11): Inhalte eines einklappbaren Blocks werden wie direkte Kinder behandelt.
-                    if (child is GardenExpander expander)
-                    {
-                        expander.MinimumSize = new Size(inner, 0);
-                        foreach (Control nested in expander.Controls) FitChild(nested, inner - expander.Padding.Horizontal);
-                    }
-                }
-                section.ResumeLayout(true);
+                var section = sections[i]; section.TabIndex = i;
+                int sectionWidth = section.Parent == librarySheet ? Math.Max(260, libraryWorkspace.ClientSize.Width - SystemInformation.VerticalScrollBarWidth - gap * 2) : width;
+                FitContainer(section, sectionWidth);
             }
         }
         finally { arranging = false; }
-        static void FitChild(Control child, int inner)
+        static void FitContainer(FlowLayoutPanel panel, int width)
         {
-            if (child is Label or FlowLayoutPanel or CheckBox) child.MaximumSize = new Size(inner, 0);
-            else if (child is not Button) child.Width = inner;
-            if (child is FlowLayoutPanel row and not GardenExpander)
-                foreach (var label in row.Controls.OfType<Label>()) label.MaximumSize = new Size(inner - 8, 0);
+            panel.SuspendLayout();
+            panel.MinimumSize = new Size(width, 0); panel.MaximumSize = new Size(width, 0); panel.Width = width;
+            int inner = Math.Max(100, width - panel.Padding.Horizontal - 10);
+            foreach (Control child in panel.Controls)
+            {
+                if (child is FlowLayoutPanel nested && !nested.WrapContents) FitContainer(nested, inner);
+                else if (child is Label or FlowLayoutPanel or CheckBox) child.MaximumSize = new Size(inner, 0);
+                else if (child is not Button) child.Width = inner;
+                if (child is FlowLayoutPanel row && child is not GardenExpander && child is not GardenCardFlow)
+                    foreach (var label in row.Controls.OfType<Label>()) label.MaximumSize = new Size(inner - 8, 0);
+            }
+            panel.ResumeLayout(true);
         }
     }
     private bool CanEdit() => !working && !gate.Busy && !damagedDraft;
     private void ShowPrompt()
     {
+        views.SelectedIndex = 0;
         ArrangeWorkspace(); workspace.PerformLayout(); draft.Focus();
-        int top = workspace.PointToClient(draft.Parent!.PointToScreen(Point.Empty)).Y - workspace.AutoScrollPosition.Y;
-        workspace.AutoScrollPosition = new Point(0, Math.Max(0, top));
+        int top = workspace.PointToClient(draft.PointToScreen(Point.Empty)).Y - workspace.AutoScrollPosition.Y;
+        workspace.AutoScrollPosition = new Point(0, Math.Max(0, top - BrandTheme.ElementGap));
     }
     private bool LibraryAvailable => !working && !gate.Busy && library != null;
     private PromptDocument Document() => new(original.Text, goal.Text, audience.Text, format.Text, constraints.Text, draft.Text, candidate.Text, title.Text, libraryId, review, reviewSource, reviewAnswer.Text, reviewSuggestion.Checked);
-    private void ScheduleSave() { if (!loading && !damagedDraft) { saveTimer.Stop(); saveTimer.Start(); findings.Text = "Text geändert · bitte formal erneut prüfen. Inhaltliche Eignung bleibt ungeprüft."; RefreshActions(); } }
+    private void RefreshSaveStatus()
+    {
+        draftStatus.Text = damagedDraft ? "Arbeitsentwurf nicht lesbar · vorhandene Datei bleibt erhalten." :
+            draftSaved ? "Entwurf lokal gesichert." : "Entwurf noch nicht gesichert.";
+        var entry = libraryId.HasValue ? library?.Search("").FirstOrDefault(e => e.Id == libraryId) : null;
+        libraryStatus.Text = entry == null ? "Noch nicht in der Bibliothek gespeichert." :
+            entry.Title == title.Text && entry.Versions.LastOrDefault()?.Text == draft.Text ?
+            "Aktuelle Fassung in der Bibliothek gespeichert." : "Bibliothek enthält eine andere Fassung · Änderungen noch nicht dort gespeichert.";
+    }
+    private void ClearPending()
+    {
+        pendingDocument = pendingBasis = null;
+        replacementPanel.Visible = false; replacementPreview.Clear();
+    }
+    internal bool QueueReplacement(PromptDocument target, string reason)
+    {
+        if (!CanEdit() || !target.Valid) return false;
+        var current = Document();
+        if (current == target) return true;
+        // Erstes Diktat landet direkt im zentralen Editor. Bestehende Arbeit bekommt immer eine Vorschau.
+        if (current == new PromptDocument()) { ApplyDocument(target); ShowPrompt(); return true; }
+        pendingBasis = current; pendingDocument = target;
+        replacementInfo.Text = reason + " · Erst „Änderungen übernehmen“ ersetzt deinen Arbeitsstand. Rücknahme gilt für die letzte Übernahme in dieser Sitzung.";
+        if (target.Original != current.Original || target.Goal != current.Goal || target.Title != current.Title || target.LibraryId != current.LibraryId || target.Audience != current.Audience || target.Format != current.Format || target.Constraints != current.Constraints)
+            replacementInfo.Text += " Dabei wechseln auch Ausgangstext, Ergänzungen und Bibliothekszuordnung zur ausgewählten Fassung.";
+        replacementPreview.Text = target.Draft.Length == 0 ? "(Leerer neuer Prompt)" : target.Draft;
+        replacementPanel.Visible = true; views.SelectedIndex = 0;
+        RefreshActions(); ArrangeWorkspace(); workspace.ScrollControlIntoView(replacementPanel);
+        info.Text = "Vorschau bereit. Dein aktueller Prompt bleibt bis zur bewussten Übernahme unverändert.";
+        return true;
+    }
+    internal bool ApplyPending()
+    {
+        if (!CanEdit() || pendingDocument == null) return false;
+        if (pendingBasis != Document()) { info.Text = "Dein Arbeitsstand wurde seit der Vorschau geändert. Bitte eine neue Vorschau erstellen."; return false; }
+        var target = pendingDocument;
+        ApplyDocument(target); ShowPrompt();
+        return true;
+    }
+    private void ApplyDocument(PromptDocument target)
+    {
+        if (!CanEdit() || !target.Valid) return;
+        var before = Document();
+        LoadDocument(target);
+        undoDocument = before; undoBasis = Document();
+        if (Flush()) info.Text = "Bewusst übernommen und lokal gesichert. Die letzte Übernahme lässt sich in dieser Sitzung rückgängig machen.";
+        RefreshActions();
+    }
+    internal bool UndoReplacement()
+    {
+        if (!CanEdit() || undoDocument == null) return false;
+        var current = Document(); var restore = undoDocument;
+        using var lease = gate.TryEnter("Werkstattübernahme zurücknehmen"); if (lease == null) return false;
+        if (current != undoBasis)
+        {
+            bool consent = ConfirmUndo?.Invoke() ?? MessageBox.Show(this,
+                "Seit der Übernahme hast du weitergearbeitet. Zurückholen ersetzt den gesamten Arbeitsentwurf einschließlich späterer Änderungen. Diese Änderungen lassen sich danach nicht wiederherstellen. Bibliothekseinträge bleiben erhalten. Trotzdem zurückholen?",
+                "Letzte Übernahme rückgängig?", MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) == DialogResult.Yes;
+            if (!consent) return false;
+        }
+        if (IsDisposed || lease.Token.IsCancellationRequested || Document() != current) return false;
+        LoadDocument(restore);
+        if (Flush()) info.Text = "Vorheriger Arbeitsentwurf zurückgeholt und lokal gesichert.";
+        RefreshActions(); ShowPrompt(); return true;
+    }
+    private void ScheduleSave() { if (!loading && !damagedDraft) { draftSaved = false; RefreshSaveStatus(); saveTimer.Stop(); saveTimer.Start(); findings.Text = "Text geändert · bitte formal erneut prüfen. Inhaltliche Eignung bleibt ungeprüft."; RefreshActions(); } }
     public bool Flush()
     {
         saveTimer.Stop(); if (damagedDraft) return true; // Preserve unreadable file; never overwrite it.
-        try { var doc = Document(); if (!doc.Valid) throw new InvalidDataException(); ProtectedFile.Write(draftPath, doc); return true; }
-        catch { info.Text = "Entwurf nur im Fenster! Speichern fehlgeschlagen. Bitte kopieren; Beenden bleibt angehalten."; return false; }
+        try { var doc = Document(); if (!doc.Valid) throw new InvalidDataException(); ProtectedFile.Write(draftPath, doc); draftSaved = true; RefreshSaveStatus(); return true; }
+        catch { draftSaved = false; RefreshSaveStatus(); info.Text = "Entwurf nur im Fenster! Speichern fehlgeschlagen. Bitte kopieren; Beenden bleibt angehalten."; return false; }
     }
     private string DamagedDraftMessage()
     {
@@ -368,6 +481,9 @@ public sealed class PromptPage : UserControl
             {
                 if (!doc.Valid) throw new InvalidDataException();
                 LoadDocument(doc);
+                draftSaved = doc == Document(); RefreshSaveStatus();
+                if (string.IsNullOrWhiteSpace(doc.Draft) && doc.Original.Length > 0)
+                    info.Text = "Mein Prompt ist leer. Deinen vorhandenen Ausgangstext findest du unter „Ausgangstext ansehen“; dort kannst du ihn bewusst als Vorschau übernehmen.";
             }
         }
         catch
@@ -378,6 +494,7 @@ public sealed class PromptPage : UserControl
     }
     private void LoadDocument(PromptDocument doc)
     {
+        ClearPending(); undoDocument = undoBasis = null; draftSaved = false;
         findings.Text = "Noch nicht geprüft.";
         loading = true;
         try
@@ -397,11 +514,9 @@ public sealed class PromptPage : UserControl
         }
         if (!CanEdit() || string.IsNullOrWhiteSpace(text)) { info.Text = "Kein übernehmbarer Text vorhanden oder Vorgang läuft."; return; }
         if (text.Length > 24000) { info.Text = "Maximal 24.000 Zeichen. Bitte einen Ausschnitt übernehmen."; return; }
-        if (!ConfirmReplace()) return;
-        LoadDocument(new(Original: text)); Flush(); views.SelectedIndex = 0; workspace.AutoScrollPosition = Point.Empty; info.Text = "Text übernommen. So verwenden oder freiwillig ergänzen.";
+        QueueReplacement(new(Original: text, Draft: text), "Diktat / Text übernehmen");
     }
-    private bool ConfirmReplace() => string.IsNullOrWhiteSpace(original.Text + goal.Text + audience.Text + format.Text + constraints.Text + draft.Text + candidate.Text + title.Text) || MessageBox.Show(this, "Aktuellen Arbeitsentwurf ersetzen? Ungespeicherte Änderungen sind danach weg. Bibliothekseinträge bleiben erhalten.", "Arbeitsentwurf ersetzen", MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) == DialogResult.Yes;
-    private void NewPrompt() { if (CanEdit() && ConfirmReplace()) { LoadDocument(new()); Flush(); findings.Text = "Noch nicht geprüft."; } }
+    private void NewPrompt() { if (CanEdit()) QueueReplacement(new(), "Neuen leeren Prompt beginnen"); }
     private void Check()
     {
         string text = string.IsNullOrWhiteSpace(draft.Text) ? original.Text : draft.Text;
@@ -420,20 +535,14 @@ public sealed class PromptPage : UserControl
     private void SaveLibrary(bool asNew)
     {
         if (!CanEdit() || library == null) { info.Text = "Bibliothek derzeit nicht beschreibbar."; return; }
-        try { libraryId = library.Save(asNew ? null : libraryId, title.Text, draft.Text, original.Text); Flush(); RefreshLibrary(); info.Text = "Prompt bewusst in der Bibliothek gespeichert. Frühere Versionen bleiben erhalten."; }
+        try { libraryId = library.Save(asNew ? null : libraryId, title.Text, draft.Text, original.Text); bool saved = Flush(); RefreshLibrary(); RefreshSaveStatus(); if (saved) info.Text = "Prompt bewusst in der Bibliothek gespeichert. Frühere Versionen bleiben erhalten."; }
         catch (Exception ex) { info.Text = ex is InvalidDataException or InvalidOperationException ? ex.Message : "Bibliothek konnte nicht gespeichert werden. Entwurf bleibt erhalten."; }
     }
     private void LoadEntry()
     {
-        if (!CanEdit() || libraryList.SelectedItem is not PromptEntry entry || versions.SelectedIndex < 0 || !ConfirmReplace()) return;
+        if (!CanEdit() || libraryList.SelectedItem is not PromptEntry entry || versions.SelectedIndex < 0) return;
         var version = entry.Versions[versions.SelectedIndex];
-        LoadDocument(new(Original: version.Original, Draft: version.Text, Title: entry.Title, LibraryId: entry.Id)); Flush(); Check(); views.SelectedIndex = 0;
-        // Direkt auf den Anfang von „Mein Prompt“ springen; ScrollControlIntoView ließe ein hohes Feld wegen der Fokusregel stehen.
-        PerformLayout(); workspace.PerformLayout();
-        int draftTop = workspace.PointToClient(draft.Parent!.PointToScreen(draft.Location)).Y - workspace.AutoScrollPosition.Y;
-        int gap = (int)Math.Round(BrandTheme.ElementGap * DeviceDpi / 96f);
-        workspace.AutoScrollPosition = new Point(0, Math.Max(0, draftTop - gap));
-        info.Text = $"Version {version.Number} geladen. Erneutes Speichern erzeugt eine zusätzliche Version.";
+        QueueReplacement(new(Original: version.Original, Draft: version.Text, Title: entry.Title, LibraryId: entry.Id), $"Bibliothek · Version {version.Number}");
     }
     private void ChangeFavorite()
     {
@@ -510,6 +619,10 @@ public sealed class PromptPage : UserControl
         if (review?.Questions.FirstOrDefault() is PromptQuestion q)
         { reviewQuestion.Text = q.Question + "\r\n" + q.Reason; reviewOptions.Items.AddRange(q.Options); }
         if (review?.Suggestions.FirstOrDefault() is PromptSuggestion s) reviewSuggestion.Text = s.Text + "\r\nWarum: " + s.Reason;
+        reviewInfo.Visible = review != null;
+        candidate.Visible = candidate.Text.Length > 0;
+        candidateInfo.Visible = review != null || candidate.Text.Length > 0;
+        adopt.Visible = candidate.Text.Length > 0;
         candidateInfo.Text = review == null ? "Hier wird nichts automatisch umgeschrieben." :
             review.Questions.Length == 0 && review.Suggestions.Length == 0 ? "Kein konkreter Ergänzungsvorschlag in diesem Durchlauf. Das bedeutet nicht, dass dein Prompt perfekt ist." :
             "Nichts vorausgewählt. Deine Antwort oder ausgewählte Ergänzung erscheint zusammen mit dem unveränderten bisherigen Text als Vorschau. Erst mit Übernehmen wird daraus dein Prompt.";
@@ -581,8 +694,8 @@ public sealed class PromptPage : UserControl
         freshDraft.Enabled = !working && !gate.Busy;
         bool hasModel = File.Exists(LocalPromptModel.ModelPath) && !modelInvalid;
         generate.Enabled = available && (OnlineReview || (hasModel && File.Exists(LocalPromptModel.RuntimePath))) && !string.IsNullOrWhiteSpace(draft.Text) && draft.Text.Length <= (OnlineReview ? 24000 : 3000);
-        generate.Text = reviewSource == draft.Text ? "Erneut prüfen" : "Prompt prüfen";
-        adopt.Text = "Ergänzungen in meinen Prompt übernehmen";
+        generate.Text = OnlineReview ? (reviewSource == draft.Text ? "Erneut online prüfen" : "Online mit Claude prüfen") : (reviewSource == draft.Text ? "Erneut lokal prüfen" : "Lokal prüfen");
+        adopt.Text = "KI-Ergänzungen übernehmen";
         reviewAnswer.Enabled = reviewOptions.Enabled = reviewSuggestion.Enabled = available && reviewSource == draft.Text;
         cancelAi.Enabled = working && !cancelling;
         bool showDownload = !OnlineReview && !hasModel;
@@ -592,6 +705,23 @@ public sealed class PromptPage : UserControl
         // Heute stummer Ausstieg bei leerem Entwurf; jetzt sichtbar gesperrt.
         copyPrompt.Enabled = available && !string.IsNullOrWhiteSpace(draft.Text);
         adoptIdea.Enabled = available && !string.IsNullOrWhiteSpace(original.Text);
+        original.ReadOnly = true; replacementPreview.ReadOnly = true;
+        applyReplacement.Enabled = available && pendingDocument != null && pendingBasis == Document();
+        dismissReplacement.Enabled = available;
+        undoReplacement.Visible = undoDocument != null;
+        undoReplacement.Enabled = available && undoDocument != null;
+        openSave.Enabled = saveVersion.Enabled = saveNew.Enabled = available && library != null && !string.IsNullOrWhiteSpace(draft.Text);
+        recheck.Enabled = available && !string.IsNullOrWhiteSpace(draft.Text);
+        bool hasSource = original.Text.Length > 0;
+        sourceBlock.Visible = hasSource;
+        if (sections.Count == 4) sections[1].Visible = hasSource;
+        if (pendingDocument != null && pendingBasis != Document())
+            replacementInfo.Text = "Dein Arbeitsstand wurde seit dieser Vorschau geändert. Bitte die Vorschau verwerfen und neu erstellen; Übernehmen ist gesperrt.";
+        cancelAi.Visible = working; workStatus.Visible = working || workClock.ElapsedMilliseconds > 0;
+        adopt.Visible = candidate.Text.Length > 0;
+        candidateInfo.Visible = review != null || candidate.Text.Length > 0;
+        reviewInfo.Visible = review != null;
+        RefreshSaveStatus();
         connectionBlock.Detail = reviewProvider.SelectedItem?.ToString() ?? "";
         // Eine Quelle für den Hinweis und für jede Hervorhebung der Werkstatt.
         var step = NextStep(showDownload, adoptable);
@@ -603,18 +733,16 @@ public sealed class PromptPage : UserControl
     private WorkshopStep NextStep(bool showDownload, bool adoptable)
     {
         string hint = damagedDraft ? $"Arbeitsentwurf {Path.GetFileName(draftPath)} nicht lesbar: Eingabefelder und „Version laden“ bleiben gesperrt, weil beide in den Entwurf schreiben würden. „Favorit umschalten“ und „Eintrag löschen …“ kannst du weiter benutzen. Mit „Leer neu anfangen“ bekommst du einen leeren, beschreibbaren Entwurf zurück." :
-            string.IsNullOrWhiteSpace(draft.Text) ? "Fülle „Mein Prompt“ aus oder übernimm deine Idee. Danach kannst du deinen Prompt prüfen lassen." :
+            string.IsNullOrWhiteSpace(draft.Text) ? "Schreibe direkt in „Mein Prompt“ oder übernimm ein Diktat. Prüfen und Ergänzen sind freiwillig." :
             !OnlineReview && draft.Text.Length > 3000 ? "Dein Prompt ist für die kleine KI zu lang. Bitte auf höchstens 3.000 Zeichen kürzen oder Claude auswählen." :
             review != null && reviewSource != draft.Text ? "Dein Prompt wurde geändert. Für passende Rückfragen erneut prüfen. Frühere Antworten bleiben sichtbar." :
             (OnlineReview ? "Claude prüft online · Console-Guthaben wird genutzt. " : "Lokale KI · experimentelle Qualität. ") + "Prompt prüfen → Frage beantworten oder Ergänzung auswählen → bewusst übernehmen. Speichern geht auch ohne KI.";
         // Entwurf beschädigt: Einziger Weg nach vorn ist der Ausweg; die Abschnitte sind gesperrt und bleiben ohne Hervorhebung.
         if (damagedDraft) return new(hint, [reloadDraft]);
-        GardenButton idea = string.IsNullOrWhiteSpace(original.Text) ? importDictation : adoptIdea;
-        GardenButton ai = working ? cancelAi : showDownload ? download : adoptable ? adopt : generate;
-        // Reihenfolge der Abschnitte: Deine Idee, Ergänzungen, Mein Prompt, KI, Fertige Prompts.
-        return new(hint, [idea, build, copyPrompt, ai, loadVersion]);
+        // Der fertige Text bleibt die Hauptaktion; während der Arbeit hat Abbrechen Vorrang.
+        return new(hint, working ? [cancelAi] : [copyPrompt]);
     }
-    private GardenButton[] WorkshopButtons() => [importDictation, newPrompt, adoptIdea, build, copyPrompt, recheck, handoff, saveVersion, saveNew, connection, generate, download, cancelAi, adopt, verify, loadVersion, favorite, deleteEntry, reloadDraft, freshDraft];
+    private GardenButton[] WorkshopButtons() => [openReview, openSave, applyReplacement, dismissReplacement, undoReplacement, importDictation, newPrompt, adoptIdea, build, copyPrompt, recheck, handoff, saveVersion, saveNew, connection, generate, download, cancelAi, adopt, verify, loadVersion, favorite, deleteEntry, reloadDraft, freshDraft];
     private static IEnumerable<Button> Buttons(Control parent)
     {
         foreach (Control child in parent.Controls) { if (child is Button button) yield return button; foreach (var nested in Buttons(child)) yield return nested; }
